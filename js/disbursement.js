@@ -36,33 +36,47 @@ const Disbursement = {
   // ============================================================
   renderList() {
     const entity = Auth.activeEntity;
-    const items = DB.getWhere('disbursements', d => d.entity === entity);
 
     const actions = el('div', { class: 'actions-bar' });
     const addBtn = el('button', { class: 'btn btn-primary', text: 'File Expense' });
     addBtn.addEventListener('click', () => { this.view = 'form'; this.detailId = null; App.handleRoute(); });
     actions.appendChild(addBtn);
 
-    const fundFilter = el('select', { class: 'form-select', style: 'max-width:180px' });
+    const fundFilter = el('select', { class: 'form-select', style: 'max-width:150px' });
     fundFilter.appendChild(el('option', { value: '', text: 'All Funds' }));
     ['Firm Fund', 'Client Fund'].forEach(f => fundFilter.appendChild(el('option', { value: f, text: f })));
-    fundFilter.addEventListener('change', () => this.refreshList(listContainer, fundFilter.value, statusFilter.value));
     actions.appendChild(fundFilter);
 
-    const statusFilter = el('select', { class: 'form-select', style: 'max-width:180px' });
+    const statusFilter = el('select', { class: 'form-select', style: 'max-width:150px' });
     statusFilter.appendChild(el('option', { value: '', text: 'All Statuses' }));
     ['Draft', 'Submitted', 'Under Review', 'Approved', 'Released', 'Rejected'].forEach(s => {
       statusFilter.appendChild(el('option', { value: s, text: s }));
     });
-    statusFilter.addEventListener('change', () => this.refreshList(listContainer, fundFilter.value, statusFilter.value));
     actions.appendChild(statusFilter);
+
+    // Month/Year Filters
+    const monthFilter = el('select', { class: 'form-select', style: 'max-width:120px' });
+    monthFilter.appendChild(el('option', { value: '', text: 'All Months' }));
+    ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].forEach((m, i) => {
+      monthFilter.appendChild(el('option', { value: String(i), text: m }));
+    });
+    actions.appendChild(monthFilter);
+
+    const years = [...new Set(DB.getAll('disbursements').map(d => new Date(d.submittedAt || Date.now()).getFullYear()))].sort((a,b) => b-a);
+    const yearFilter = el('select', { class: 'form-select', style: 'max-width:110px' });
+    yearFilter.appendChild(el('option', { value: '', text: 'All Years' }));
+    years.forEach(y => yearFilter.appendChild(el('option', { value: String(y), text: String(y) })));
+    actions.appendChild(yearFilter);
+
+    const updateFilters = () => this.refreshList(listContainer, fundFilter.value, statusFilter.value, monthFilter.value, yearFilter.value);
+    [fundFilter, statusFilter, monthFilter, yearFilter].forEach(f => f.addEventListener('change', updateFilters));
 
     const reportBtn = el('button', { class: 'btn btn-ghost', text: 'Summary Report' });
     reportBtn.addEventListener('click', () => { this.view = 'report'; App.handleRoute(); });
     actions.appendChild(reportBtn);
 
     const listContainer = el('div');
-    this.refreshList(listContainer, '', '');
+    this.refreshList(listContainer, '', '', '', '');
 
     const wrapper = el('div');
     wrapper.appendChild(actions);
@@ -70,12 +84,18 @@ const Disbursement = {
     return wrapper;
   },
 
-  refreshList(container, fundFilter, statusFilter) {
+  refreshList(container, fundFilter, statusFilter, monthFilter, yearFilter) {
     while (container.firstChild) container.removeChild(container.firstChild);
     const entity = Auth.activeEntity;
     let items = DB.getWhere('disbursements', d => d.entity === entity);
+    
     if (fundFilter) items = items.filter(d => this.getFundSource(d) === fundFilter);
     if (statusFilter) items = items.filter(d => d.status === statusFilter);
+    if (monthFilter) items = items.filter(d => new Date(d.submittedAt).getMonth() === parseInt(monthFilter));
+    if (yearFilter) items = items.filter(d => new Date(d.submittedAt).getFullYear() === parseInt(yearFilter));
+
+    // Default Sort: Latest first
+    items.sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt));
 
     if (items.length === 0) {
       container.appendChild(el('p', { text: 'No expenses found.', class: 'empty-state' }));
@@ -85,7 +105,7 @@ const Disbursement = {
     const table = el('table', { class: 'data-table' });
     const thead = el('thead');
     const thr = el('tr');
-    ['Employee', 'Category', 'Amount', 'Fund', 'Status', 'Actions'].forEach(h => thr.appendChild(el('th', { text: h })));
+    ['Employee', 'Category', 'Amount', 'Fund', 'Status', 'Date', 'Actions'].forEach(h => thr.appendChild(el('th', { text: h })));
     thead.appendChild(thr);
     table.appendChild(thead);
 
@@ -102,6 +122,7 @@ const Disbursement = {
       tdFund.appendChild(fundBadge);
       tr.appendChild(tdFund);
       tr.appendChild(el('td', { text: d.status }));
+      tr.appendChild(el('td', { text: formatDate(d.submittedAt) }));
       const tdAct = el('td');
       const viewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'View' });
       viewBtn.addEventListener('click', () => { this.view = 'detail'; this.detailId = d.id; App.handleRoute(); });
@@ -271,33 +292,78 @@ const Disbursement = {
 
     const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-lg); border-top: 1px solid var(--color-border); padding-top: var(--spacing-lg);' });
 
-    // Self-approval block
-    if (Auth.isSelfApprover(this.getEmployeeId(d))) {
-      const blockMsg = el('p', { class: 'field-error', text: 'You cannot approve your own expense.' });
-      container.appendChild(blockMsg);
+    const isRequester = Auth.isSelfApprover(this.getEmployeeId(d));
+    const role = Auth.user.role;
+    const dept = Auth.user.department;
+    const isManagerial = role === 'Admin' || role === 'Manager';
+    const isAccounting = dept === 'Accounting';
+    const fundSource = this.getFundSource(d);
+
+    if (fundSource === 'Client Fund') {
+      // 1-Tier Immediate Release for Client Funds
+      if (d.status !== 'Released' && d.status !== 'Rejected' && d.status !== 'Cancelled') {
+        if (isManagerial || isAccounting) {
+          const releaseBtn = el('button', { class: 'btn btn-success', text: 'Authorize Release' });
+          releaseBtn.addEventListener('click', () => { this.release(this.detailId); App.handleRoute(); });
+          actions.appendChild(releaseBtn);
+
+          const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject / Void' });
+          rejectBtn.addEventListener('click', () => {
+            const reason = prompt('Enter rejection reason:');
+            if (reason) { this.reject(this.detailId, reason); App.handleRoute(); }
+          });
+          actions.appendChild(rejectBtn);
+        } else {
+          container.appendChild(el('p', { class: 'empty-state', text: 'Waiting for Admin/Manager or Accounting release.' }));
+        }
+      }
     } else {
-      const level = this.canApprove(this.detailId);
-      if (level === 'manager') {
-        const approveBtn = el('button', { class: 'btn btn-primary', text: 'Approve (Manager)' });
-        approveBtn.addEventListener('click', () => { this.approve(this.detailId); App.handleRoute(); });
-        actions.appendChild(approveBtn);
-      } else if (level === 'accounting') {
-        const approveBtn = el('button', { class: 'btn btn-primary', text: 'Approve (Accounting)' });
-        approveBtn.addEventListener('click', () => { this.approve(this.detailId); App.handleRoute(); });
-        actions.appendChild(approveBtn);
+      // 2-Tier Approval Chain for Firm Funds
+      // 1. Review Phase (Submitted -> Approved)
+      if (d.status === 'Submitted' || d.status === 'Under Review') {
+        if (isManagerial) {
+          if (isRequester) {
+            container.appendChild(el('p', { class: 'field-error', text: 'You cannot approve your own expense submission.' }));
+          } else {
+            const approveBtn = el('button', { class: 'btn btn-primary', text: 'Approve Submission' });
+            approveBtn.addEventListener('click', () => { this.approve(this.detailId); App.handleRoute(); });
+            actions.appendChild(approveBtn);
+
+            const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject' });
+            rejectBtn.addEventListener('click', () => {
+              const reason = prompt('Enter rejection reason:');
+              if (reason) { this.reject(this.detailId, reason); App.handleRoute(); }
+            });
+            actions.appendChild(rejectBtn);
+          }
+        } else {
+          container.appendChild(el('p', { class: 'empty-state', text: 'Waiting for Admin/Manager review.' }));
+        }
       }
-      if (d.status !== 'Released' && d.status !== 'Rejected' && d.status !== 'Cancelled' && !Auth.isSelfApprover(this.getEmployeeId(d))) {
-        const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject' });
-        rejectBtn.addEventListener('click', () => {
-          const reason = prompt('Enter rejection reason:');
-          if (reason) { this.reject(this.detailId, reason); App.handleRoute(); }
-        });
-        actions.appendChild(rejectBtn);
-      }
+
+      // 2. Release Phase (Approved -> Released)
       if (d.status === 'Approved') {
-        const releaseBtn = el('button', { class: 'btn btn-success', text: 'Release' });
-        releaseBtn.addEventListener('click', () => { this.release(this.detailId); App.handleRoute(); });
-        actions.appendChild(releaseBtn);
+        const isApprover = Auth.user.id === d.approvedBy;
+        const canRelease = (isAccounting || isManagerial) && !isRequester && !isApprover;
+        
+        if (canRelease) {
+          const releaseBtn = el('button', { class: 'btn btn-success', text: 'Authorize Release' });
+          releaseBtn.addEventListener('click', () => { this.release(this.detailId); App.handleRoute(); });
+          actions.appendChild(releaseBtn);
+
+          const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Void / Reject' });
+          rejectBtn.addEventListener('click', () => {
+            const reason = prompt('Enter reason for voiding:');
+            if (reason) { this.reject(this.detailId, reason); App.handleRoute(); }
+          });
+          actions.appendChild(rejectBtn);
+        } else if (isRequester) {
+          container.appendChild(el('p', { class: 'field-error', text: 'You cannot release your own expense.' }));
+        } else if (isApprover) {
+          container.appendChild(el('p', { class: 'field-success', text: 'You approved this expense; a different user (Accounting or another Manager) must authorize the release.' }));
+        } else {
+          container.appendChild(el('p', { class: 'empty-state', text: 'Waiting for Accounting release authorization.' }));
+        }
       }
     }
 
@@ -306,38 +372,29 @@ const Disbursement = {
     return container;
   },
 
-  canApprove(id) {
-    const d = DB.getById('disbursements', id);
-    if (!d || Auth.isSelfApprover(this.getEmployeeId(d))) return false;
-    if (!Auth.can('disbursement:approve')) return false;
-    const fundSource = this.getFundSource(d);
-    if (fundSource === 'Firm Fund') {
-      if (d.status === 'Submitted') return 'manager';
-      if (d.status === 'Under Review') return 'accounting';
-    } else {
-      if (d.status === 'Submitted') return 'accounting';
-    }
-    return false;
-  },
-
   approve(id) {
-    const d = DB.getById('disbursements', id);
-    const level = this.canApprove(id);
-    if (!level) return { error: 'Not authorized' };
-    if (level === 'manager') {
-      DB.update('disbursements', id, { status: 'Under Review', managerApprovedBy: Auth.user.id });
-    } else if (level === 'accounting') {
-      DB.update('disbursements', id, { status: 'Approved', accountingApprovedBy: Auth.user.id });
-    }
+    DB.update('disbursements', id, { 
+      status: 'Approved', 
+      approvedBy: Auth.user.id,
+      approvedAt: new Date().toISOString()
+    });
     return { success: true };
   },
 
   release(id) {
-    DB.update('disbursements', id, { status: 'Released', releasedAt: new Date().toISOString() });
+    DB.update('disbursements', id, { 
+      status: 'Released', 
+      releasedBy: Auth.user.id,
+      releasedAt: new Date().toISOString() 
+    });
   },
 
   reject(id, reason) {
-    DB.update('disbursements', id, { status: 'Rejected', rejectionReason: reason });
+    DB.update('disbursements', id, { 
+      status: 'Rejected', 
+      rejectedBy: Auth.user.id,
+      rejectionReason: reason 
+    });
   },
 
   // ============================================================
@@ -361,15 +418,27 @@ const Disbursement = {
     // By Employee
     const byEmployee = {};
     items.forEach(d => {
-      const emp = DB.getById('users', this.getEmployeeId(d))?.name || 'Unknown';
-      byEmployee[emp] = (byEmployee[emp] || 0) + d.amount;
+      const empName = DB.getById('users', this.getEmployeeId(d))?.name || 'Unknown';
+      if (!byEmployee[empName]) byEmployee[empName] = { count: 0, total: 0 };
+      byEmployee[empName].count++;
+      byEmployee[empName].total += d.amount;
     });
 
     const empTable = el('table', { class: 'data-table' });
-    empTable.appendChild(el('thead', {}, [el('tr', {}, [el('th', { text: 'Employee' }), el('th', { text: 'Total Reimbursed' })])]));
+    empTable.appendChild(el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Employee' }),
+        el('th', { text: 'Count', class: 'text-center' }),
+        el('th', { text: 'Total Reimbursed', class: 'text-center' })
+      ])
+    ]));
     const empBody = el('tbody');
-    Object.entries(byEmployee).forEach(([name, total]) => {
-      empBody.appendChild(el('tr', {}, [el('td', { text: name }), el('td', { text: formatPHP(total) })]));
+    Object.entries(byEmployee).forEach(([name, data]) => {
+      empBody.appendChild(el('tr', {}, [
+        el('td', { text: name }),
+        el('td', { text: String(data.count), class: 'text-center' }),
+        el('td', { text: formatPHP(data.total), class: 'text-center' })
+      ]));
     });
     empTable.appendChild(empBody);
     container.appendChild(el('h3', { text: 'By Employee' }));
@@ -378,28 +447,56 @@ const Disbursement = {
     // By Category
     const byCategory = {};
     items.forEach(d => {
-      byCategory[d.category] = (byCategory[d.category] || 0) + d.amount;
+      if (!byCategory[d.category]) byCategory[d.category] = { count: 0, total: 0 };
+      byCategory[d.category].count++;
+      byCategory[d.category].total += d.amount;
     });
 
     const catTable = el('table', { class: 'data-table' });
-    catTable.appendChild(el('thead', {}, [el('tr', {}, [el('th', { text: 'Category' }), el('th', { text: 'Total' })])]));
+    catTable.appendChild(el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Category' }),
+        el('th', { text: 'Count', class: 'text-center' }),
+        el('th', { text: 'Total', class: 'text-center' })
+      ])
+    ]));
     const catBody = el('tbody');
-    Object.entries(byCategory).forEach(([cat, total]) => {
-      catBody.appendChild(el('tr', {}, [el('td', { text: cat }), el('td', { text: formatPHP(total) })]));
+    Object.entries(byCategory).forEach(([cat, data]) => {
+      catBody.appendChild(el('tr', {}, [
+        el('td', { text: cat }),
+        el('td', { text: String(data.count), class: 'text-center' }),
+        el('td', { text: formatPHP(data.total), class: 'text-center' })
+      ]));
     });
     catTable.appendChild(catBody);
     container.appendChild(el('h3', { text: 'By Category' }));
     container.appendChild(catTable);
 
     // Fund split
-    const firmTotal = items.filter(d => this.getFundSource(d) === 'Firm Fund').reduce((s, d) => s + d.amount, 0);
-    const clientTotal = items.filter(d => this.getFundSource(d) === 'Client Fund').reduce((s, d) => s + d.amount, 0);
+    const firmItems = items.filter(d => this.getFundSource(d) === 'Firm Fund');
+    const clientItems = items.filter(d => this.getFundSource(d) === 'Client Fund');
+    const firmTotal = firmItems.reduce((s, d) => s + d.amount, 0);
+    const clientTotal = clientItems.reduce((s, d) => s + d.amount, 0);
 
     const fundTable = el('table', { class: 'data-table' });
-    fundTable.appendChild(el('thead', {}, [el('tr', {}, [el('th', { text: 'Fund Source' }), el('th', { text: 'Total' })])]));
+    fundTable.appendChild(el('thead', {}, [
+      el('tr', {}, [
+        el('th', { text: 'Fund Source' }),
+        el('th', { text: 'Count', class: 'text-center' }),
+        el('th', { text: 'Total', class: 'text-center' })
+      ])
+    ]));
     const fundBody = el('tbody');
-    fundBody.appendChild(el('tr', {}, [el('td', { text: 'Firm Fund' }), el('td', { text: formatPHP(firmTotal) })]));
-    fundBody.appendChild(el('tr', {}, [el('td', { text: 'Client Fund' }), el('td', { text: formatPHP(clientTotal) })]));
+    fundBody.appendChild(el('tr', {}, [
+      el('td', { text: 'Firm Fund' }),
+      el('td', { text: String(firmItems.length), class: 'text-center' }),
+      el('td', { text: formatPHP(firmTotal), class: 'text-center' })
+    ]));
+    fundBody.appendChild(el('tr', {}, [
+      el('td', { text: 'Client Fund' }),
+      el('td', { text: String(clientItems.length), class: 'text-center' }),
+      el('td', { text: formatPHP(clientTotal), class: 'text-center' })
+    ]));
     fundTable.appendChild(fundBody);
     container.appendChild(el('h3', { text: 'By Fund Source' }));
     container.appendChild(fundTable);

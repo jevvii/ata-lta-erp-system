@@ -16,6 +16,57 @@ const App = {
     const defaultRoute = Auth.user.role === 'Admin' || Auth.user.role === 'Manager' ? '#dashboard' : '#workflow';
     location.hash = defaultRoute;
     this.handleRoute();
+    this.updateSidebarNotifications();
+  },
+
+  updateSidebarNotifications() {
+    const role = Auth.user.role;
+    const dept = Auth.user.department;
+    const isManagerial = role === 'Admin' || role === 'Manager';
+    const isAccounting = dept === 'Accounting';
+    const entity = Auth.activeEntity;
+
+    if (!isManagerial && !isAccounting) return;
+
+    const items = DB.getWhere('disbursements', d => d.entity === entity);
+    let count = 0;
+
+    items.forEach(d => {
+      const isRequester = d.employeeId === Auth.user.id;
+      const fundSource = d.fundSource || (d.type === 'ClientFunded' ? 'Client Fund' : 'Firm Fund');
+      
+      if (fundSource === 'Client Fund') {
+        // Client Funds: 1-tier, any authorized role can release immediately
+        if (d.status === 'Submitted' || d.status === 'Under Review' || d.status === 'Approved') {
+          count++;
+        }
+      } else {
+        // Firm Funds: 2-tier Approval Chain
+        // Managers: Initial review
+        if (isManagerial && (d.status === 'Submitted' || d.status === 'Under Review') && !isRequester) {
+          count++;
+        }
+        // Accounting/Other Managers: Final release (conflict block applies)
+        else if (d.status === 'Approved' && !isRequester && d.approvedBy !== Auth.user.id) {
+          count++;
+        }
+      }
+    });
+
+    const navLink = document.querySelector('nav a[href="#disbursement"]');
+    if (navLink) {
+      let badge = navLink.querySelector('.nav-badge');
+      if (count > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'nav-badge';
+          navLink.appendChild(badge);
+        }
+        badge.textContent = count > 99 ? '99+' : count;
+      } else if (badge) {
+        badge.remove();
+      }
+    }
   },
 
   renderShell() {
@@ -132,6 +183,7 @@ const App = {
       if (module.init) module.init();
       this.highlightNav(hash);
       this.updateEntityBadge();
+      this.updateSidebarNotifications();
     }
   },
 
