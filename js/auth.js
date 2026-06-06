@@ -47,7 +47,14 @@ const Auth = {
       Staff: ['clients:view','workflow:view','workflow:edit','billing:view','disbursement:view','disbursement:create','dms:view','dms:edit','reports:view'],
       Viewer: ['clients:view','workflow:view','billing:view','disbursement:view','dms:view','reports:view']
     };
-    return perms[role]?.includes(action) || false;
+    let allowed = perms[role]?.includes(action) || false;
+    
+    // Special case: dms:handover for Documentation Staff
+    if (action === 'dms:handover' && role === 'Staff') {
+      if (this.user.name.toLowerCase().includes('documentation')) allowed = true;
+    }
+    
+    return allowed;
   },
 
   isSelfApprover(recordUserId) {
@@ -56,9 +63,9 @@ const Auth = {
 
   switchEntity(entity) {
     const upper = entity.toUpperCase();
-    if (this.user?.entities.includes(upper)) {
+    if (upper === 'ALL' || this.user?.entities.includes(upper)) {
       this.activeEntity = upper;
       sessionStorage.setItem('erp_session', JSON.stringify({ userId: this.user.id, activeEntity: upper }));
     }
-  }
+  },
 };

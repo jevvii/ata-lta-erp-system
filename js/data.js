@@ -9,15 +9,19 @@
 
 const now = new Date().toISOString();
 const today = new Date().toISOString().slice(0, 10);
+const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 const lastWeek = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
 const lastMonth = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+const inThreeDays = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+const inFiveDays = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
 
 function makeId(prefix, num) {
   return prefix + '-' + String(num).padStart(4, '0');
 }
 
 const seedData = {
-  schemaVersion: 2,
+  schemaVersion: 3,
 
   users: [
     {
@@ -26,7 +30,6 @@ const seedData = {
       email: 'admin@ata-lta.ph',
       password: 'password123',
       role: 'Admin',
-      department: 'Managerial',
       entities: ['ATA', 'LTA'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/men/1.jpg',
@@ -38,7 +41,6 @@ const seedData = {
       email: 'manager@ata-lta.ph',
       password: 'password123',
       role: 'Manager',
-      department: 'Managerial',
       entities: ['ATA', 'LTA'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/2.jpg',
@@ -50,7 +52,6 @@ const seedData = {
       email: 'manager-ata@ata-lta.ph',
       password: 'password123',
       role: 'Manager',
-      department: 'Accounting',
       entities: ['ata'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/men/3.jpg',
@@ -62,7 +63,6 @@ const seedData = {
       email: 'accounting-ata@ata-lta.ph',
       password: 'password123',
       role: 'Staff',
-      department: 'Accounting',
       entities: ['ata'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/4.jpg',
@@ -74,7 +74,6 @@ const seedData = {
       email: 'accounting-lta@ata-lta.ph',
       password: 'password123',
       role: 'Staff',
-      department: 'Accounting',
       entities: ['lta'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/men/5.jpg',
@@ -86,7 +85,6 @@ const seedData = {
       email: 'ops-ata@ata-lta.ph',
       password: 'password123',
       role: 'Staff',
-      department: 'Operations',
       entities: ['ata'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/6.jpg',
@@ -98,7 +96,6 @@ const seedData = {
       email: 'ops-lta@ata-lta.ph',
       password: 'password123',
       role: 'Staff',
-      department: 'Operations',
       entities: ['lta'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/men/7.jpg',
@@ -110,7 +107,6 @@ const seedData = {
       email: 'docs@ata-lta.ph',
       password: 'password123',
       role: 'Staff',
-      department: 'Documentations',
       entities: ['ATA', 'LTA'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/8.jpg',
@@ -122,7 +118,6 @@ const seedData = {
       email: 'hr@ata-lta.ph',
       password: 'password123',
       role: 'Staff',
-      department: 'HR',
       entities: ['ATA', 'LTA'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/9.jpg',
@@ -134,7 +129,6 @@ const seedData = {
       email: 'admin-staff@ata-lta.ph',
       password: 'password123',
       role: 'Staff',
-      department: 'Admin',
       entities: ['ATA', 'LTA'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/men/10.jpg',
@@ -153,6 +147,10 @@ const seedData = {
       address: '123 Mabini St, Ermita, Manila, Metro Manila',
       entity: 'ATA',
       retainer: true,
+      tradeName: '',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
       createdAt: now
     },
     {
@@ -165,6 +163,10 @@ const seedData = {
       address: '456 Osmena Blvd, Cebu City, Cebu',
       entity: 'ATA',
       retainer: false,
+      tradeName: '',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
       createdAt: now
     },
     {
@@ -177,6 +179,10 @@ const seedData = {
       address: '789 Roxas Ave, Davao City, Davao del Sur',
       entity: 'ATA',
       retainer: true,
+      tradeName: '',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
       createdAt: now
     },
     {
@@ -189,6 +195,10 @@ const seedData = {
       address: '321 Magsaysay St, Iloilo City, Iloilo',
       entity: 'ATA',
       retainer: false,
+      tradeName: '',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
       createdAt: now
     },
     {
@@ -201,6 +211,10 @@ const seedData = {
       address: '654 JP Laurel Hwy, Tanauan, Batangas',
       entity: 'LTA',
       retainer: true,
+      tradeName: '',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
       createdAt: now
     },
     {
@@ -213,6 +227,10 @@ const seedData = {
       address: '987 National Hwy, Calamba, Laguna',
       entity: 'LTA',
       retainer: false,
+      tradeName: '',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
       createdAt: now
     },
     {
@@ -225,6 +243,10 @@ const seedData = {
       address: '147 McArthur Hwy, Angeles, Pampanga',
       entity: 'LTA',
       retainer: true,
+      tradeName: '',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
       createdAt: now
     },
     {
@@ -237,11 +259,129 @@ const seedData = {
       address: '258 Aguinaldo Hwy, Tagaytay, Cavite',
       entity: 'LTA',
       retainer: false,
+      tradeName: '',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
       createdAt: now
+    },
+    {
+      id: makeId('c', 9),
+      name: 'Pioneer Logistics Inc.',
+      tin: '901-123-456-0009',
+      contactPerson: 'David Tan',
+      phone: '0925-123-4567',
+      email: 'david.tan@pioneerlog.ph',
+      address: '77 Pioneer St, Mandaluyong, Metro Manila',
+      entity: 'ATA',
+      retainer: true,
+      tradeName: 'Pioneer Log',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
+      createdAt: now
+    },
+    {
+      id: makeId('c', 10),
+      name: 'Taguig Tech Solutions',
+      tin: '012-234-567-0010',
+      contactPerson: 'Grace Lee',
+      phone: '0926-234-5678',
+      email: 'grace.lee@taguigtech.ph',
+      address: '88 BGC High Street, Taguig, Metro Manila',
+      entity: 'LTA',
+      retainer: false,
+      tradeName: 'Taguig Tech',
+      contactUserId: '',
+      relatedCompanies: [],
+      contactDetails: [],
+      createdAt: now
+    },
+    {
+      id: makeId('c', 11),
+      name: 'Apex Global Solutions (Archived)',
+      tin: '901-234-567-0011',
+      contactPerson: 'Robert Tan',
+      phone: '0925-901-2345',
+      email: 'robert.tan@apexglobal.ph',
+      address: '12 Pioneer St, Mandaluyong City',
+      entity: 'ATA',
+      retainer: true,
+      tradeName: 'Apex Global',
+      contactUserId: makeId('u', 4),
+      relatedCompanies: [],
+      contactDetails: [{ type: 'email', value: 'info@apexglobal.ph', label: 'Work' }],
+      status: 'Archived',
+      createdAt: lastMonth
+    },
+    {
+      id: makeId('c', 12),
+      name: 'Summit Summit Summit (Archived)',
+      tin: '012-345-678-0012',
+      contactPerson: 'Lisa Go',
+      phone: '0926-012-3456',
+      email: 'lisa.go@summit.ph',
+      address: '88 Shaw Blvd, Pasig City',
+      entity: 'LTA',
+      retainer: false,
+      tradeName: 'Summit Group',
+      contactUserId: makeId('u', 5),
+      relatedCompanies: [],
+      contactDetails: [{ type: 'mobile', value: '09260123456', label: 'Mobile' }],
+      status: 'Archived',
+      createdAt: lastMonth
     }
   ],
 
   workRequests: [
+    {
+      id: makeId('wr', 102),
+      title: 'Completed Assessment - Mock',
+      description: 'Mock completed item due today to demonstrate green styling.',
+      clientId: makeId('c', 2),
+      entity: 'ATA',
+      status: 'Completed',
+      requestedBy: makeId('u', 1),
+      assignedTo: makeId('u', 4),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
+      createdAt: today,
+      updatedAt: today,
+      dueDate: today
+    },
+    {
+      id: makeId('wr', 101),
+      title: 'Urgent Processing - All Staff (Mock)',
+      description: 'Mock item due today to demonstrate daily task views.',
+      clientId: makeId('c', 1),
+      entity: 'ATA',
+      status: 'Processing',
+      requestedBy: makeId('u', 1),
+      assignedTo: makeId('u', 4),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
+      createdAt: today,
+      updatedAt: today,
+      dueDate: today
+    },
+    {
+      id: makeId('wr', 99),
+      title: 'Monthly VAT Declaration - Mock',
+      description: 'Mock item due this week.',
+      clientId: makeId('c', 1),
+      entity: 'ATA',
+      status: 'Processing',
+      requestedBy: makeId('u', 1),
+      assignedTo: makeId('u', 4),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
+      createdAt: today,
+      updatedAt: today,
+      dueDate: inThreeDays
+    },
     {
       id: makeId('wr', 1),
       title: 'Annual Tax Filing 2025',
@@ -251,6 +391,9 @@ const seedData = {
       status: 'Processing',
       requestedBy: makeId('u', 1),
       assignedTo: makeId('u', 4),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -263,6 +406,9 @@ const seedData = {
       status: 'Completed',
       requestedBy: makeId('u', 3),
       assignedTo: makeId('u', 4),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -275,6 +421,9 @@ const seedData = {
       status: 'Billing',
       requestedBy: makeId('u', 2),
       assignedTo: makeId('u', 4),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -287,6 +436,9 @@ const seedData = {
       status: 'Pre-processing',
       requestedBy: makeId('u', 1),
       assignedTo: makeId('u', 5),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -299,6 +451,9 @@ const seedData = {
       status: 'Draft',
       requestedBy: makeId('u', 2),
       assignedTo: null,
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
       createdAt: today,
       updatedAt: today
     },
@@ -311,6 +466,9 @@ const seedData = {
       status: 'Cancelled',
       requestedBy: makeId('u', 2),
       assignedTo: makeId('u', 5),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -323,6 +481,9 @@ const seedData = {
       status: 'Processing',
       requestedBy: makeId('u', 1),
       assignedTo: makeId('u', 6),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -335,12 +496,108 @@ const seedData = {
       status: 'Pre-processing',
       requestedBy: makeId('u', 4),
       assignedTo: makeId('u', 7),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
       createdAt: today,
       updatedAt: today
+    },
+    {
+      id: makeId('wr', 9),
+      title: 'Apex Setup Phase 1',
+      description: 'Initial tax mapping and consulting setup.',
+      clientId: makeId('c', 11),
+      entity: 'ATA',
+      status: 'Cancelled',
+      requestedBy: makeId('u', 2),
+      assignedTo: makeId('u', 4),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
+      createdAt: lastMonth,
+      updatedAt: now
+    },
+    {
+      id: makeId('wr', 10),
+      title: 'Summit Financial Audit',
+      description: 'Staged financial audit of local accounts.',
+      clientId: makeId('c', 12),
+      entity: 'LTA',
+      status: 'Cancelled',
+      requestedBy: makeId('u', 3),
+      assignedTo: makeId('u', 5),
+      linkedInvoiceId: null,
+      linkedDisbursementIds: [],
+      linkedTransmittalIds: [],
+      createdAt: lastMonth,
+      updatedAt: now
     }
   ],
 
   tasks: [
+    {
+      id: makeId('t', 994),
+      workRequestId: makeId('wr', 102),
+      title: 'Complete assessment review',
+      description: 'Review is done.',
+      status: 'Completed',
+      assigneeId: makeId('u', 4),
+      predecessors: [],
+      dueDate: today,
+      timeLogs: [
+        { startTime: '09:00', endTime: '11:30', date: today, hours: 2.5, userId: makeId('u', 4), note: 'Reviewed assessment documents for Manila Fresh Foods Inc.' }
+      ],
+      taskDocuments: [],
+      createdAt: today,
+      updatedAt: today
+    },
+    {
+      id: makeId('t', 991),
+      workRequestId: makeId('wr', 101),
+      title: 'Review initial documentation',
+      description: 'Check for completeness.',
+      status: 'Pending',
+      assigneeId: makeId('u', 4),
+      predecessors: [],
+      dueDate: today,
+      timeLogs: [
+        { startTime: '13:00', endTime: '15:15', date: today, hours: 2.25, userId: makeId('u', 4), note: 'Initial review of documentation completeness' }
+      ],
+      taskDocuments: [],
+      createdAt: today,
+      updatedAt: today
+    },
+    {
+      id: makeId('t', 992),
+      workRequestId: makeId('wr', 101),
+      title: 'Process compliance',
+      description: 'Ensure compliance with LTA/ATA standards.',
+      status: 'In Progress',
+      assigneeId: makeId('u', 5),
+      predecessors: [],
+      dueDate: today,
+      timeLogs: [
+        { startTime: '09:30', endTime: '12:00', date: today, hours: 2.5, userId: makeId('u', 5), note: 'Reviewed compliance documents' },
+        { startTime: '14:00', endTime: '16:00', date: yesterday, hours: 2.0, userId: makeId('u', 5), note: 'LTA compliance checklist review' }
+      ],
+      taskDocuments: [],
+      createdAt: today,
+      updatedAt: today
+    },
+    {
+      id: makeId('t', 993),
+      workRequestId: makeId('wr', 99),
+      title: 'Draft VAT Return',
+      description: 'Drafting the VAT return.',
+      status: 'Pending',
+      assigneeId: makeId('u', 4),
+      predecessors: [],
+      dueDate: inThreeDays,
+      timeLogs: [],
+      taskDocuments: [],
+      createdAt: today,
+      updatedAt: today
+    },
     // Work Request 1 - Annual Tax Filing 2025 (ATA)
     {
       id: makeId('t', 1),
@@ -351,6 +608,10 @@ const seedData = {
       assigneeId: makeId('u', 4),
       predecessors: [],
       dueDate: lastMonth,
+      timeLogs: [
+        { startTime: '09:00', endTime: '12:30', date: lastWeek, hours: 3.5, userId: makeId('u', 4), note: 'Gathering and sorting client receipts' }
+      ],
+      taskDocuments: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -363,6 +624,10 @@ const seedData = {
       assigneeId: makeId('u', 4),
       predecessors: [makeId('t', 1)],
       dueDate: lastWeek,
+      timeLogs: [
+        { startTime: '13:00', endTime: '16:15', date: lastWeek, hours: 3.25, userId: makeId('u', 4), note: 'Encoding trial balance' }
+      ],
+      taskDocuments: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -375,6 +640,10 @@ const seedData = {
       assigneeId: makeId('u', 4),
       predecessors: [makeId('t', 2)],
       dueDate: today,
+      timeLogs: [
+        { startTime: '10:00', endTime: '12:30', date: today, hours: 2.5, userId: makeId('u', 4), note: 'Drafted annual tax schedules' }
+      ],
+      taskDocuments: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -388,6 +657,10 @@ const seedData = {
       assigneeId: makeId('u', 4),
       predecessors: [],
       dueDate: lastMonth,
+      timeLogs: [
+        { startTime: '10:00', endTime: '12:00', date: lastWeek, hours: 2.0, userId: makeId('u', 4), note: 'Reconciled bank statements' }
+      ],
+      taskDocuments: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -400,6 +673,10 @@ const seedData = {
       assigneeId: makeId('u', 4),
       predecessors: [makeId('t', 4)],
       dueDate: lastWeek,
+      timeLogs: [
+        { startTime: '13:30', endTime: '15:30', date: lastWeek, hours: 2.0, userId: makeId('u', 4), note: 'Generated financial reports' }
+      ],
+      taskDocuments: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -412,6 +689,8 @@ const seedData = {
       assigneeId: makeId('u', 3),
       predecessors: [makeId('t', 5)],
       dueDate: lastWeek,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: lastMonth,
       updatedAt: now
     },
@@ -425,6 +704,8 @@ const seedData = {
       assigneeId: makeId('u', 4),
       predecessors: [],
       dueDate: lastWeek,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -437,6 +718,10 @@ const seedData = {
       assigneeId: makeId('u', 4),
       predecessors: [makeId('t', 7)],
       dueDate: today,
+      timeLogs: [
+        { startTime: '14:00', endTime: '16:45', date: today, hours: 2.75, userId: makeId('u', 4), note: 'Cross-checked ledger with eBIR form 2550Q' }
+      ],
+      taskDocuments: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -449,6 +734,8 @@ const seedData = {
       assigneeId: makeId('u', 3),
       predecessors: [makeId('t', 8)],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -462,6 +749,10 @@ const seedData = {
       assigneeId: makeId('u', 5),
       predecessors: [],
       dueDate: lastWeek,
+      timeLogs: [
+        { startTime: '09:00', endTime: '11:30', date: lastWeek, hours: 2.5, userId: makeId('u', 5), note: 'Sent out PBC list to client contacts' }
+      ],
+      taskDocuments: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -474,6 +765,11 @@ const seedData = {
       assigneeId: makeId('u', 5),
       predecessors: [makeId('t', 10)],
       dueDate: today,
+      timeLogs: [
+        { startTime: '08:45', endTime: '11:45', date: today, hours: 3.0, userId: makeId('u', 5), note: 'Conducted analytical review on analytical assets' },
+        { startTime: '13:30', endTime: '17:00', date: yesterday, hours: 3.5, userId: makeId('u', 5), note: 'Completed analytical review of revenue accounts' }
+      ],
+      taskDocuments: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -486,6 +782,8 @@ const seedData = {
       assigneeId: makeId('u', 5),
       predecessors: [makeId('t', 11)],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -499,6 +797,8 @@ const seedData = {
       assigneeId: null,
       predecessors: [],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: today,
       updatedAt: today
     },
@@ -511,6 +811,8 @@ const seedData = {
       assigneeId: null,
       predecessors: [makeId('t', 13)],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: today,
       updatedAt: today
     },
@@ -523,6 +825,8 @@ const seedData = {
       assigneeId: null,
       predecessors: [makeId('t', 14)],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: today,
       updatedAt: today
     },
@@ -536,6 +840,8 @@ const seedData = {
       assigneeId: makeId('u', 6),
       predecessors: [],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -548,6 +854,8 @@ const seedData = {
       assigneeId: makeId('u', 6),
       predecessors: [makeId('t', 16)],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: lastWeek,
       updatedAt: now
     },
@@ -561,8 +869,10 @@ const seedData = {
       assigneeId: makeId('u', 7),
       predecessors: [],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: today,
-      updatedAt: now
+      updatedAt: today
     },
     {
       id: makeId('t', 19),
@@ -573,8 +883,10 @@ const seedData = {
       assigneeId: makeId('u', 7),
       predecessors: [makeId('t', 18)],
       dueDate: today,
+      timeLogs: [],
+      taskDocuments: [],
       createdAt: today,
-      updatedAt: now
+      updatedAt: today
     }
   ],
 
@@ -583,19 +895,22 @@ const seedData = {
       id: makeId('inv', 1),
       clientId: makeId('c', 1),
       entity: 'ATA',
+      workRequestId: makeId('wr', 1),
       invoiceNumber: 'ATA-SI-2025-001',
       issueDate: lastWeek,
       dueDate: today,
       status: 'Sent',
       lineItems: [
-        { description: 'Professional Fee - Annual Tax Filing', amount: 45000.00, type: 'PF', vatTreatment: 'VATable' },
-        { description: 'BIR DST', amount: 150.00, type: 'Government Fee', vatTreatment: 'VAT-Exempt' },
-        { description: 'SEC Filing Fee', amount: 500.00, type: 'Government Fee', vatTreatment: 'VAT-Exempt' }
+        { description: 'Professional Fee - Annual Tax Filing', amount: 45000.00, type: 'Professional Fee' },
+        { description: 'BIR DST', amount: 150.00, type: 'Government Fee' },
+        { description: 'SEC Filing Fee', amount: 500.00, type: 'Government Fee' }
       ],
       subtotal: 45650.00,
-      vat: 5400.00,
-      total: 51050.00,
+      vat: 0,
+      total: 45650.00,
       paidAmount: 0.00,
+      payments: [],
+      createdBy: makeId('u', 3),
       createdAt: lastWeek,
       updatedAt: lastWeek
     },
@@ -603,18 +918,45 @@ const seedData = {
       id: makeId('inv', 2),
       clientId: makeId('c', 3),
       entity: 'ATA',
+      workRequestId: makeId('wr', 2),
       invoiceNumber: 'ATA-SI-2025-002',
       issueDate: lastMonth,
       dueDate: lastWeek,
       status: 'Paid',
       lineItems: [
-        { description: 'Professional Fee - Monthly Bookkeeping (Retainer)', amount: 15000.00, type: 'PF', vatTreatment: 'VATable' }
+        { description: 'Professional Fee - Monthly Bookkeeping (Retainer)', amount: 15000.00, type: 'Professional Fee' }
       ],
       subtotal: 15000.00,
-      vat: 1800.00,
-      total: 16800.00,
-      paidAmount: 16800.00,
+      vat: 0,
+      total: 15000.00,
+      paidAmount: 15000.00,
+      payments: [
+        { amount: 15000.00, method: 'Cash', reference: 'Migrated', date: lastWeek, recordedBy: '' }
+      ],
+      createdBy: makeId('u', 3),
       createdAt: lastMonth,
+      updatedAt: lastWeek
+    },
+    {
+      id: makeId('inv', 5),
+      clientId: makeId('c', 2),
+      entity: 'ATA',
+      workRequestId: makeId('wr', 3),
+      invoiceNumber: 'ATA-SI-2025-003',
+      issueDate: lastWeek,
+      dueDate: today,
+      status: 'Sent',
+      lineItems: [
+        { description: 'Professional Fee - VAT Compliance Review', amount: 25000.00, type: 'Professional Fee' },
+        { description: 'BIR eFile Access Fee', amount: 200.00, type: 'Government Fee' }
+      ],
+      subtotal: 25200.00,
+      vat: 0,
+      total: 25200.00,
+      paidAmount: 0.00,
+      payments: [],
+      createdBy: makeId('u', 3),
+      createdAt: lastWeek,
       updatedAt: lastWeek
     },
     {
@@ -626,14 +968,18 @@ const seedData = {
       dueDate: today,
       status: 'Partially Paid',
       lineItems: [
-        { description: 'Professional Fee - Audit Engagement', amount: 85000.00, type: 'PF', vatTreatment: 'VATable' },
-        { description: 'SEC Filing Fee', amount: 1000.00, type: 'Government Fee', vatTreatment: 'VAT-Exempt' },
-        { description: 'PCC Fee', amount: 800.00, type: 'Government Fee', vatTreatment: 'VAT-Exempt' }
+        { description: 'Professional Fee - Audit Engagement', amount: 85000.00, type: 'Professional Fee' },
+        { description: 'SEC Filing Fee', amount: 1000.00, type: 'Government Fee' },
+        { description: 'PCC Fee', amount: 800.00, type: 'Government Fee' }
       ],
       subtotal: 86800.00,
-      vat: 10200.00,
-      total: 97000.00,
+      vat: 0,
+      total: 86800.00,
       paidAmount: 48500.00,
+      payments: [
+        { amount: 48500.00, method: 'Cash', reference: 'Migrated', date: lastWeek, recordedBy: '' }
+      ],
+      createdBy: makeId('u', 3),
       createdAt: lastWeek,
       updatedAt: lastWeek
     },
@@ -646,13 +992,15 @@ const seedData = {
       dueDate: today,
       status: 'Draft',
       lineItems: [
-        { description: 'Professional Fee - Quarterly Tax Filing Q1', amount: 22000.00, type: 'PF', vatTreatment: 'VATable' },
-        { description: 'BIR eFiling Fee', amount: 100.00, type: 'Government Fee', vatTreatment: 'VAT-Exempt' }
+        { description: 'Professional Fee - Quarterly Tax Filing Q1', amount: 22000.00, type: 'Professional Fee' },
+        { description: 'BIR eFiling Fee', amount: 100.00, type: 'Government Fee' }
       ],
       subtotal: 22100.00,
-      vat: 2640.00,
-      total: 24740.00,
+      vat: 0,
+      total: 22100.00,
       paidAmount: 0.00,
+      payments: [],
+      createdBy: makeId('u', 3),
       createdAt: today,
       updatedAt: today
     }
@@ -660,19 +1008,61 @@ const seedData = {
 
   disbursements: [
     {
+      id: makeId('d', 100),
+      category: 'Representation',
+      description: 'Completed representation expense (Mock)',
+      amount: 4500.00,
+      fundSource: 'Company Fund',
+      linkedInvoiceId: null,
+      linkedWorkRequestId: makeId('wr', 102),
+      entity: 'ATA',
+      employeeId: makeId('u', 4),
+      requestedBy: makeId('u', 4),
+      status: 'Released',
+      submittedAt: today,
+      dueDate: today,
+      accountingApprovedBy: makeId('u', 1),
+      paymentHandledBy: makeId('u', 1),
+      paymentDetails: { method: 'Cash', reference: 'VOU-001', bank: '', date: today, processedBy: makeId('u', 1) },
+      updatedAt: today
+    },
+    {
+      id: makeId('d', 99),
+      category: 'Travel',
+      description: 'Client visit travel expenses (Mock)',
+      amount: 1200.00,
+      fundSource: 'Petty Cash',
+      linkedInvoiceId: null,
+      linkedWorkRequestId: makeId('wr', 99),
+      entity: 'ATA',
+      employeeId: makeId('u', 4),
+      requestedBy: makeId('u', 4),
+      status: 'Approved',
+      submittedAt: today,
+      dueDate: inFiveDays,
+      accountingApprovedBy: makeId('u', 1),
+      paymentHandledBy: makeId('u', 1),
+      paymentDetails: { method: '', reference: '', bank: '', date: '', processedBy: '' },
+      updatedAt: today
+    },
+    {
       id: makeId('d', 1),
       category: 'Government Fee',
       description: 'BIR Documentary Stamp Tax payment',
       amount: 150.00,
       fundSource: 'Client Fund',
       linkedInvoiceId: makeId('inv', 1),
+      linkedWorkRequestId: makeId('wr', 1),
       entity: 'ATA',
       employeeId: makeId('u', 4),
+      requestedBy: makeId('u', 4),
       status: 'Released',
       submittedAt: lastWeek,
       accountingApprovedBy: makeId('u', 3),
       releasedAt: lastWeek,
-      receiptFilename: 'bir-dst-receipt.pdf'
+      receiptFilename: 'bir-dst-receipt.pdf',
+      paymentHandledBy: makeId('u', 3),
+      paymentDetails: { method: 'Cash', reference: '', bank: '', date: lastWeek, processedBy: makeId('u', 3) }
     },
     {
       id: makeId('d', 2),
@@ -681,13 +1071,17 @@ const seedData = {
       amount: 500.00,
       fundSource: 'Client Fund',
       linkedInvoiceId: makeId('inv', 1),
+      linkedWorkRequestId: makeId('wr', 1),
       entity: 'ATA',
       employeeId: makeId('u', 4),
+      requestedBy: makeId('u', 4),
       status: 'Released',
       submittedAt: lastWeek,
       accountingApprovedBy: makeId('u', 3),
       releasedAt: lastWeek,
-      receiptFilename: 'sec-filing-receipt.pdf'
+      receiptFilename: 'sec-filing-receipt.pdf',
+      paymentHandledBy: makeId('u', 3),
+      paymentDetails: { method: 'Cash', reference: '', bank: '', date: lastWeek, processedBy: makeId('u', 3) }
     },
     {
       id: makeId('d', 3),
@@ -698,12 +1092,15 @@ const seedData = {
       linkedInvoiceId: null,
       entity: 'ATA',
       employeeId: makeId('u', 6),
+      requestedBy: makeId('u', 6),
       status: 'Approved',
       submittedAt: lastWeek,
       managerApprovedBy: makeId('u', 2),
       accountingApprovedBy: makeId('u', 3),
       releasedAt: null,
-      receiptFilename: 'office-supplies.pdf'
+      receiptFilename: 'office-supplies.pdf',
+      paymentHandledBy: '',
+      paymentDetails: { method: '', reference: '', bank: '', date: '', processedBy: '' }
     },
     {
       id: makeId('d', 4),
@@ -714,10 +1111,13 @@ const seedData = {
       linkedInvoiceId: makeId('inv', 3),
       entity: 'LTA',
       employeeId: makeId('u', 5),
+      requestedBy: makeId('u', 5),
       status: 'Submitted',
       submittedAt: lastWeek,
       releasedAt: null,
-      receiptFilename: null
+      receiptFilename: null,
+      paymentHandledBy: '',
+      paymentDetails: { method: '', reference: '', bank: '', date: '', processedBy: '' }
     },
     {
       id: makeId('d', 5),
@@ -728,12 +1128,15 @@ const seedData = {
       linkedInvoiceId: null,
       entity: 'LTA',
       employeeId: makeId('u', 5),
+      requestedBy: makeId('u', 5),
       status: 'Released',
       submittedAt: lastWeek,
       managerApprovedBy: makeId('u', 2),
       accountingApprovedBy: makeId('u', 3),
       releasedAt: lastWeek,
-      receiptFilename: 'transportation-allowance.pdf'
+      receiptFilename: 'transportation-allowance.pdf',
+      paymentHandledBy: makeId('u', 3),
+      paymentDetails: { method: 'Cash', reference: '', bank: '', date: lastWeek, processedBy: makeId('u', 3) }
     },
     {
       id: makeId('d', 6),
@@ -744,11 +1147,14 @@ const seedData = {
       linkedInvoiceId: null,
       entity: 'LTA',
       employeeId: makeId('u', 9),
+      requestedBy: makeId('u', 9),
       status: 'Under Review',
       submittedAt: lastWeek,
       managerApprovedBy: makeId('u', 2),
       releasedAt: null,
-      receiptFilename: null
+      receiptFilename: null,
+      paymentHandledBy: '',
+      paymentDetails: { method: '', reference: '', bank: '', date: '', processedBy: '' }
     }
   ],
 
@@ -767,7 +1173,12 @@ const seedData = {
       ],
       entity: 'ATA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 2),
@@ -781,7 +1192,12 @@ const seedData = {
       handover_log: [],
       entity: 'ATA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 3),
@@ -797,7 +1213,12 @@ const seedData = {
       ],
       entity: 'ATA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 4),
@@ -813,7 +1234,12 @@ const seedData = {
       ],
       entity: 'ATA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 5),
@@ -827,7 +1253,12 @@ const seedData = {
       handover_log: [],
       entity: 'ATA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 6),
@@ -841,7 +1272,12 @@ const seedData = {
       handover_log: [],
       entity: 'ATA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 7),
@@ -857,7 +1293,12 @@ const seedData = {
       ],
       entity: 'LTA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 8),
@@ -871,7 +1312,12 @@ const seedData = {
       handover_log: [],
       entity: 'LTA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 9),
@@ -887,7 +1333,12 @@ const seedData = {
       ],
       entity: 'LTA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 10),
@@ -901,7 +1352,12 @@ const seedData = {
       handover_log: [],
       entity: 'LTA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 11),
@@ -917,7 +1373,12 @@ const seedData = {
       ],
       entity: 'LTA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
     },
     {
       id: makeId('doc', 12),
@@ -931,7 +1392,54 @@ const seedData = {
       handover_log: [],
       entity: 'LTA',
       dataUrl: '',
-      versions: []
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: ''
+    },
+    {
+      id: makeId('doc', 13),
+      fileName: 'Apex-Tax-Plan-2025.pdf',
+      workRequestId: makeId('wr', 9),
+      document_type: 'original_scan',
+      category: 'Requirement Docs',
+      uploader: makeId('u', 4),
+      uploadDate: lastMonth,
+      description: 'Archived draft tax planning paper.',
+      handover_log: [],
+      entity: 'ATA',
+      dataUrl: '',
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: '',
+      status: 'Archived',
+      archived: true
+    },
+    {
+      id: makeId('doc', 14),
+      fileName: 'Summit-Trial-Balance.xlsx',
+      workRequestId: makeId('wr', 10),
+      document_type: 'original_scan',
+      category: 'Requirement Docs',
+      uploader: makeId('u', 5),
+      uploadDate: lastMonth,
+      description: 'Archived preliminary trial balance.',
+      handover_log: [],
+      entity: 'LTA',
+      dataUrl: '',
+      versions: [],
+      comments: [],
+      documentLifecycle: 'collected',
+      scannedBy: '',
+      envelopeId: '',
+      storedLocation: '',
+      status: 'Archived',
+      archived: true
     }
   ],
 
@@ -1051,7 +1559,12 @@ const seedData = {
       details: 'Admin logged out',
       timestamp: lastWeek + 'T17:00:00Z'
     }
-  ]
+  ],
+
+  pendingChanges: [],
+  transmittals: [],
+  billingTemplates: [],
+  disbursementTemplates: []
 };
 
 // ============================================================
@@ -1059,13 +1572,115 @@ const seedData = {
 // ============================================================
 
 const DB = {
-  SCHEMA_VERSION: 2,
+  SCHEMA_VERSION: 9,
 
   init() {
     const stored = localStorage.getItem('erp_schema_version');
     if (!stored || parseInt(stored, 10) !== this.SCHEMA_VERSION) {
-      this.resetToSeed();
+      const oldVersion = stored ? parseInt(stored, 10) : 0;
+      if (oldVersion === 2) {
+        this.migrateV2ToV3();
+      } else {
+        this.resetToSeed();
+      }
     }
+  },
+
+  migrateV2ToV3() {
+    // Migrate users: remove department
+    const users = this.getAll('users');
+    users.forEach(u => { delete u.department; });
+    this.save('users', users);
+
+    // Migrate clients: add new fields
+    const clients = this.getAll('clients');
+    clients.forEach(c => {
+      c.tradeName = c.tradeName || '';
+      c.contactUserId = c.contactUserId || '';
+      c.relatedCompanies = c.relatedCompanies || [];
+      c.contactDetails = c.contactDetails || [];
+    });
+    this.save('clients', clients);
+
+    // Migrate workRequests: add linkage fields
+    const workRequests = this.getAll('workRequests');
+    workRequests.forEach(wr => {
+      wr.linkedInvoiceId = wr.linkedInvoiceId || null;
+      wr.linkedDisbursementIds = wr.linkedDisbursementIds || [];
+      wr.linkedTransmittalIds = wr.linkedTransmittalIds || [];
+    });
+    this.save('workRequests', workRequests);
+
+    // Migrate tasks: add taskDocuments, transform timeLogs
+    const tasks = this.getAll('tasks');
+    tasks.forEach(t => {
+      t.taskDocuments = t.taskDocuments || [];
+      if (Array.isArray(t.timeLogs)) {
+        t.timeLogs = t.timeLogs.map(log => {
+          if (log.startTime !== undefined) return log;
+          const startTime = '09:00';
+          const hours = parseFloat(log.hours) || 0;
+          const endH = Math.floor(9 + hours);
+          const endM = Math.round((9 + hours - endH) * 60);
+          const endTime = String(endH).padStart(2, '0') + ':' + String(endM).padStart(2, '0');
+          return { startTime, endTime, date: log.date || today, note: log.note || '', hours: log.hours };
+        });
+      } else {
+        t.timeLogs = [];
+      }
+    });
+    this.save('tasks', tasks);
+
+    // Migrate invoices: remove VAT, recalculate totals, add payments/createdBy
+    const invoices = this.getAll('invoices');
+    invoices.forEach(inv => {
+      inv.vat = 0;
+      inv.total = inv.subtotal || 0;
+      if (inv.lineItems) {
+        inv.lineItems.forEach(li => { delete li.vatTreatment; });
+      }
+      inv.payments = inv.payments || [];
+      if ((inv.paidAmount || 0) > 0 && inv.payments.length === 0) {
+        inv.payments.push({
+          amount: inv.paidAmount,
+          method: 'Cash',
+          reference: 'Migrated',
+          date: inv.updatedAt || inv.issueDate || today,
+          recordedBy: ''
+        });
+      }
+      inv.createdBy = inv.createdBy || '';
+      inv.paymentCollectedBy = inv.paymentCollectedBy || '';
+    });
+    this.save('invoices', invoices);
+
+    // Migrate disbursements: add requestedBy, paymentHandledBy, paymentDetails
+    const disbursements = this.getAll('disbursements');
+    disbursements.forEach(d => {
+      d.requestedBy = d.requestedBy || d.employeeId || '';
+      d.paymentHandledBy = d.paymentHandledBy || '';
+      d.paymentDetails = d.paymentDetails || { method: '', reference: '', bank: '', date: '', processedBy: '' };
+    });
+    this.save('disbursements', disbursements);
+
+    // Migrate documents: add lifecycle fields
+    const documents = this.getAll('documents');
+    documents.forEach(doc => {
+      doc.comments = doc.comments || [];
+      doc.documentLifecycle = doc.documentLifecycle || 'collected';
+      doc.scannedBy = doc.scannedBy || '';
+      doc.envelopeId = doc.envelopeId || '';
+      doc.storedLocation = doc.storedLocation || '';
+    });
+    this.save('documents', documents);
+
+    // Initialize new tables
+    if (!localStorage.getItem('erp_pendingChanges')) this.save('pendingChanges', []);
+    if (!localStorage.getItem('erp_transmittals')) this.save('transmittals', []);
+    if (!localStorage.getItem('erp_billingTemplates')) this.save('billingTemplates', []);
+    if (!localStorage.getItem('erp_disbursementTemplates')) this.save('disbursementTemplates', []);
+
+    localStorage.setItem('erp_schema_version', String(this.SCHEMA_VERSION));
   },
 
   getAll(table) {

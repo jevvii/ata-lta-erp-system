@@ -13,43 +13,34 @@ const App = {
     this.setupNavigation();
     this.setupResponsiveMenu();
     this.setupLogout();
-    const defaultRoute = Auth.user.role === 'Admin' || Auth.user.role === 'Manager' ? '#dashboard' : '#workflow';
-    location.hash = defaultRoute;
+    
+    // Default route is dashboard for all users
+    const defaultRoute = '#dashboard';
+    
+    if (!location.hash || location.hash === '') {
+       location.hash = defaultRoute;
+    }
+    
     this.handleRoute();
     this.updateSidebarNotifications();
   },
 
   updateSidebarNotifications() {
     const role = Auth.user.role;
-    const dept = Auth.user.department;
-    const isManagerial = role === 'Admin' || role === 'Manager';
-    const isAccounting = dept === 'Accounting';
+    const isAdmin = role === 'Admin';
     const entity = Auth.activeEntity;
-
-    if (!isManagerial && !isAccounting) return;
 
     const items = DB.getWhere('disbursements', d => d.entity === entity);
     let count = 0;
 
     items.forEach(d => {
-      const isRequester = d.employeeId === Auth.user.id;
-      const fundSource = d.fundSource || (d.type === 'ClientFunded' ? 'Client Fund' : 'Firm Fund');
-      
-      if (fundSource === 'Client Fund') {
-        // Client Funds: 1-tier, any authorized role can release immediately
-        if (d.status === 'Submitted' || d.status === 'Under Review' || d.status === 'Approved') {
-          count++;
-        }
-      } else {
-        // Firm Funds: 2-tier Approval Chain
-        // Managers: Initial review
-        if (isManagerial && (d.status === 'Submitted' || d.status === 'Under Review') && !isRequester) {
-          count++;
-        }
-        // Accounting/Other Managers: Final release (conflict block applies)
-        else if (d.status === 'Approved' && !isRequester && d.approvedBy !== Auth.user.id) {
-          count++;
-        }
+      // Admin sees count of submissions awaiting their approval
+      if (isAdmin && (d.status === 'Submitted' || d.status === 'Under Review')) {
+        count++;
+      }
+      // Handlers see count of disbursements awaiting their final release
+      if (d.status === 'Approved' && d.paymentHandledBy === Auth.user.id) {
+        count++;
       }
     });
 
@@ -65,6 +56,26 @@ const App = {
         badge.textContent = count > 99 ? '99+' : count;
       } else if (badge) {
         badge.remove();
+      }
+    }
+
+    // Also badge the Admin nav link for pending changes and disbursement submissions
+    if (isAdmin) {
+      const pendingChanges = (typeof PendingChanges !== 'undefined' && typeof PendingChanges.getAllPending === 'function') ? PendingChanges.getAllPending() : [];
+      const adminCount = count + pendingChanges.length;
+      const adminNav = document.querySelector('nav a[href="#admin"]');
+      if (adminNav) {
+        let adminBadge = adminNav.querySelector('.nav-badge');
+        if (adminCount > 0) {
+          if (!adminBadge) {
+            adminBadge = document.createElement('span');
+            adminBadge.className = 'nav-badge';
+            adminNav.appendChild(adminBadge);
+          }
+          adminBadge.textContent = adminCount > 99 ? '99+' : adminCount;
+        } else if (adminBadge) {
+          adminBadge.remove();
+        }
       }
     }
   },
@@ -83,11 +94,33 @@ const App = {
       }
     }
     this.renderEntitySwitcher();
+
+    // Hide Admin nav link for non-Admin users
+    const adminNav = document.querySelector('nav a[href="#admin"]');
+    if (adminNav) {
+      adminNav.parentElement.style.display = Auth.user.role === 'Admin' ? '' : 'none';
+    }
+
+    // Hide Reports nav link for non-Managerial users
+    const reportsNav = document.querySelector('nav a[href="#reports"]');
+    if (reportsNav) {
+      const isManagerial = Auth.user.role === 'Admin' || Auth.user.role === 'Manager';
+      reportsNav.parentElement.style.display = isManagerial ? '' : 'none';
+    }
   },
 
   renderEntitySwitcher() {
     const sel = document.getElementById('entity-switcher');
     sel.innerHTML = '';
+    
+    if (Auth.user.entities.length > 1 && (Auth.user.role === 'Admin' || Auth.user.role === 'Manager')) {
+      const opt = document.createElement('option');
+      opt.value = 'ALL';
+      opt.textContent = 'Consolidated View';
+      if ('ALL' === Auth.activeEntity) opt.selected = true;
+      sel.appendChild(opt);
+    }
+    
     Auth.user.entities.forEach(e => {
       const opt = document.createElement('option');
       opt.value = e;
@@ -95,6 +128,7 @@ const App = {
       if (e === Auth.activeEntity) opt.selected = true;
       sel.appendChild(opt);
     });
+    
     sel.onchange = (ev) => {
       Auth.switchEntity(ev.target.value);
       this.updateEntityBadge();
@@ -163,15 +197,27 @@ const App = {
     const moduleMap = {
       '#dashboard': Dashboard,
       '#clients': Clients,
-      '#workflow': Workflow,
+      '#operations': Workflow,
       '#billing': Billing,
       '#disbursement': Disbursement,
-      '#documents': DMS,
+      '#transmittal': Transmittal,
       '#reports': Reports,
       '#admin': Users
     };
+
+    // RBAC: Restricted modules
+    if (hash === '#reports' && (Auth.user.role !== 'Admin' && Auth.user.role !== 'Manager')) {
+       location.hash = '#dashboard';
+       return;
+    }
+    if (hash === '#admin' && Auth.user.role !== 'Admin') {
+       location.hash = '#dashboard';
+       return;
+    }
+
     const module = moduleMap[hash];
     const content = document.getElementById('content');
+
     if (module && module.render) {
       content.innerHTML = '';
       const rendered = module.render();
@@ -191,6 +237,23 @@ const App = {
     document.querySelectorAll('nav a').forEach(a => {
       a.classList.toggle('active', a.getAttribute('href') === hash);
     });
+  },
+
+  getPreferredViewMode(module) {
+    const key = `erp_preferred_view_${module}`;
+    const stored = localStorage.getItem(key);
+    if (module === 'operations' || module === 'billing' || module === 'disbursement' || module === 'transmittals') {
+      if (!stored || stored === 'card') return 'board';
+    }
+    if (stored === 'list' || stored === 'table' || stored === 'board') return stored;
+    return 'list';
+  },
+
+  setPreferredViewMode(module, mode) {
+    const key = `erp_preferred_view_${module}`;
+    if (mode === 'list' || mode === 'table' || mode === 'board') {
+      localStorage.setItem(key, mode);
+    }
   }
 };
 
