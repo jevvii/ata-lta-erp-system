@@ -456,7 +456,7 @@ const Dashboard = {
           this.calYear--;
         }
       } else {
-        const d = new Date(this.selectedDay);
+        const d = this.selectedDay ? new Date(this.selectedDay) : new Date();
         d.setDate(d.getDate() - 1);
         this.selectedDay = this.fmtDate(d);
         this.calMonth = d.getMonth();
@@ -475,7 +475,7 @@ const Dashboard = {
           this.calYear++;
         }
       } else {
-        const d = new Date(this.selectedDay);
+        const d = this.selectedDay ? new Date(this.selectedDay) : new Date();
         d.setDate(d.getDate() + 1);
         this.selectedDay = this.fmtDate(d);
         this.calMonth = d.getMonth();
