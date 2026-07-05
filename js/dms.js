@@ -67,13 +67,10 @@ const DMS = {
   renderList() {
     const entity = Auth.activeEntity;
 
-    // Restrict Documents module to Admin and Documentation Staff
-    const isAdmin = Auth.user.role === 'Admin';
-    const isDocStaff = Auth.user.role === 'Staff' && Auth.can('dms:handover');
-    
-    if (!isAdmin && !isDocStaff) {
+    // Restrict Documents module to roles with dms:edit or dms:handover
+    if (!Auth.can('dms:edit') && !Auth.can('dms:handover')) {
       const wrapper = el('div');
-      wrapper.appendChild(el('p', { text: 'Documents are restricted to Admin and Documentation users.', class: 'empty-state' }));
+      wrapper.appendChild(el('p', { text: 'Documents are restricted to Admin, Manager, and Documentation users.', class: 'empty-state' }));
       return wrapper;
     }
 
@@ -82,23 +79,25 @@ const DMS = {
     addBtn.addEventListener('click', () => { this.view = 'form'; this.detailId = null; App.handleRoute(); });
     actions.appendChild(addBtn);
 
-    // View mode toggle
+    // View mode toggle (saveCurrentFilters assigned after filter elements are created)
+    let saveCurrentFilters;
     const viewToggle = el('div', { class: 'view-mode-toggle' });
     const viewIcons = { 'Table': ViewIcons.table, 'Board': ViewIcons.board, 'List': ViewIcons.list };
     [['Table', 'table'], ['Board', 'board'], ['List', 'list']].forEach(([label, mode]) => {
       const btn = el('button', { html: (viewIcons[label] || '') + ' ' + label });
       if (this.listViewMode === mode) btn.classList.add('active');
       btn.addEventListener('click', () => {
+        saveCurrentFilters();
         App.setPreferredViewMode('documents', mode);
         this.listViewMode = mode;
-        this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, dateFrom.value, dateTo.value);
+        this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, dateFrom.value, dateTo.value, empFilter.searchText, clientFilter.searchText);
       });
       viewToggle.appendChild(btn);
     });
     actions.appendChild(viewToggle);
 
-    const isManagerial = Auth.user.role === 'Admin' || Auth.user.role === 'Manager';
-    const canCrossEntity = isManagerial && Auth.user.entities.length > 1;
+    // Entity-scope filter — intentional direct check (entity-scope, not permission)
+    const canCrossEntity = Auth.isManagerial() && Auth.user.entities.length > 1;
 
     let entityFilter = null;
     if (canCrossEntity) {
@@ -117,35 +116,53 @@ const DMS = {
 
     const wrFilter = el('select', { class: 'form-select', style: 'max-width:200px' });
     wrFilter.appendChild(el('option', { value: '', text: 'All Work Requests' }));
-    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
+    DB.getWhere('workRequests', wr => {
+      const wrEnt = (wr.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
+      }
+      return wrEnt === entity.toUpperCase();
+    }).forEach(wr => {
       wrFilter.appendChild(el('option', { value: wr.id, text: wr.title }));
     });
-    filtersBar.appendChild(wrFilter);
+    filtersBar.appendChild(wrapFilterFieldWithClear(wrFilter));
 
-    const clientFilter = el('select', { class: 'form-select', style: 'max-width:200px' });
-    clientFilter.appendChild(el('option', { value: '', text: 'All Clients' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
-      clientFilter.appendChild(el('option', { value: c.id, text: c.name }));
+    const clientOptions = [{ value: '', text: 'All Clients' }];
+    DB.getWhere('clients', c => {
+      const clientEnt = (c.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt);
+      }
+      return clientEnt === entity.toUpperCase();
+    }).forEach(c => {
+      clientOptions.push({ value: c.id, text: c.name });
     });
+    const clientFilter = createSearchableDropdown({ placeholder: 'All Clients', options: clientOptions, maxWidth: '200px' });
     filtersBar.appendChild(clientFilter);
 
-    const empFilter = el('select', { class: 'form-select', style: 'max-width:180px' });
-    empFilter.appendChild(el('option', { value: '', text: 'All Uploaders' }));
-    DB.getWhere('users', u => ['Admin', 'Manager', 'Staff'].includes(u.role)).forEach(u => {
-      empFilter.appendChild(el('option', { value: u.id, text: u.name }));
+    const empOptions = [{ value: '', text: 'All Uploaders' }];
+    DB.getWhere('users', u => Auth.ALL_ROLES.includes(u.role)).forEach(u => {
+      empOptions.push({ value: u.id, text: u.name });
     });
+    (DB.getAll('tasks') || []).forEach(t => {
+      const name = (t.assigneeName || '').trim();
+      if (name && !empOptions.some(opt => opt.value === name || opt.text === name)) {
+        empOptions.push({ value: name, text: name });
+      }
+    });
+    const empFilter = createSearchableDropdown({ placeholder: 'All Uploaders', options: empOptions, maxWidth: '180px' });
     filtersBar.appendChild(empFilter);
 
-    const dateFrom = el('input', { type: 'date', class: 'form-select', style: 'max-width:140px' });
-    const dateTo = el('input', { type: 'date', class: 'form-select', style: 'max-width:140px' });
+    const dateFrom = el('input', { type: 'date', class: 'form-select' });
+    const dateTo = el('input', { type: 'date', class: 'form-select' });
     filtersBar.appendChild(el('span', { text: 'From:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
-    filtersBar.appendChild(dateFrom);
+    filtersBar.appendChild(wrapFilterFieldWithClear(dateFrom));
     filtersBar.appendChild(el('span', { text: 'To:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
-    filtersBar.appendChild(dateTo);
+    filtersBar.appendChild(wrapFilterFieldWithClear(dateTo));
 
     const clearBtn = el('button', {
-      class: 'btn btn-ghost btn-sm',
-      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: middle;"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>Clear'
+      class: 'btn btn-secondary btn-sm',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: middle;"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-3.5"></path></svg>Clear'
     });
     clearBtn.addEventListener('click', () => {
       wrFilter.value = '';
@@ -153,26 +170,48 @@ const DMS = {
       empFilter.value = '';
       dateFrom.value = '';
       dateTo.value = '';
+      App.clearSavedFilters('documents');
       updateFilters();
     });
     filtersBar.appendChild(clearBtn);
 
     wrapper.appendChild(filtersBar);
 
+    // Restore saved filters
+    const savedFilters = App.restoreFilters('documents');
+    if (savedFilters) {
+      if (savedFilters.workRequest) wrFilter.value = savedFilters.workRequest;
+      if (savedFilters.client) clientFilter.value = savedFilters.client;
+      if (savedFilters.employee) empFilter.value = savedFilters.employee;
+      if (savedFilters.dateFrom) dateFrom.value = savedFilters.dateFrom;
+      if (savedFilters.dateTo) dateTo.value = savedFilters.dateTo;
+    }
+
+    saveCurrentFilters = () => {
+      App.saveFilters('documents', {
+        workRequest: wrFilter.value,
+        client: clientFilter.value,
+        employee: empFilter.value,
+        dateFrom: dateFrom.value,
+        dateTo: dateTo.value
+      });
+    };
+
     const listContainer = el('div');
     wrapper.appendChild(listContainer);
 
-    const updateFilters = () => this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, dateFrom.value, dateTo.value);
-    [wrFilter, clientFilter, empFilter, dateFrom, dateTo].forEach(f => f.addEventListener('change', updateFilters));
+    const updateFilters = () => this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, dateFrom.value, dateTo.value, empFilter.searchText, clientFilter.searchText);
+    [wrFilter, clientFilter, empFilter, dateFrom, dateTo].forEach(f => f.addEventListener('change', () => { saveCurrentFilters(); updateFilters(); }));
+    [empFilter, clientFilter].forEach(el => el.addEventListener('input', () => { saveCurrentFilters(); updateFilters(); }));
     if (entityFilter) {
-      entityFilter.addEventListener('change', () => this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, dateFrom.value, dateTo.value));
+      entityFilter.addEventListener('change', () => { saveCurrentFilters(); this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, dateFrom.value, dateTo.value, empFilter.searchText, clientFilter.searchText); });
     }
 
-    this.refreshList(listContainer, '', '', '', '', '', canCrossEntity ? entity : entity);
+    this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, dateFrom.value, dateTo.value, empFilter.searchText, clientFilter.searchText);
     return wrapper;
   },
 
-  refreshList(container, wrFilter, clientFilter, empFilter, dateFrom, dateTo) {
+  refreshList(container, wrFilter, clientFilter, empFilter, dateFrom, dateTo, empSearchText, clientSearchText) {
     while (container.firstChild) container.removeChild(container.firstChild);
     const entity = Auth.activeEntity;
 
@@ -185,13 +224,32 @@ const DMS = {
     });
 
     if (wrFilter) docs = docs.filter(d => d.workRequestId === wrFilter);
-    if (clientFilter) {
-      docs = docs.filter(d => {
-        const wr = DB.getById('workRequests', d.workRequestId);
-        return wr && wr.clientId === clientFilter;
-      });
+    if (clientFilter || (clientSearchText && clientSearchText.trim() !== '')) {
+      const selectedClient = clientFilter ? DB.getById('clients', clientFilter) : null;
+      if (selectedClient && selectedClient.name === clientSearchText) {
+        docs = docs.filter(d => {
+          const wr = DB.getById('workRequests', d.workRequestId);
+          return wr && wr.clientId === clientFilter;
+        });
+      } else if (clientSearchText && clientSearchText.trim() !== '') {
+        const query = clientSearchText.trim().toLowerCase();
+        docs = docs.filter(d => {
+          const wr = DB.getById('workRequests', d.workRequestId);
+          if (!wr) return false;
+          const client = DB.getById('clients', wr.clientId);
+          return client && client.name.toLowerCase().includes(query);
+        });
+      }
     }
-    if (empFilter) docs = docs.filter(d => d.uploader === empFilter);
+    if (empSearchText && empSearchText.trim() !== '') {
+      const query = empSearchText.trim().toLowerCase();
+      docs = docs.filter(d => {
+        const u = d.uploader ? DB.getById('users', d.uploader) : null;
+        return u && u.name.toLowerCase().includes(query);
+      });
+    } else if (empFilter) {
+      docs = docs.filter(d => d.uploader === empFilter);
+    }
     if (dateFrom) {
       const fromTime = new Date(dateFrom).getTime();
       docs = docs.filter(d => new Date(d.uploadDate).getTime() >= fromTime);
@@ -236,12 +294,10 @@ const DMS = {
       const wr = DB.getById('workRequests', doc.workRequestId);
       const tdWr = el('td');
       if (wr) {
-        const wrLink = el('a', { href: '#workflow', text: wr.title });
+        const wrLink = el('a', { href: '#operations/detail/' + wr.id, text: wr.title });
         wrLink.addEventListener('click', (e) => {
           e.preventDefault();
-          Workflow.view = 'detail';
-          Workflow.detailWrId = wr.id;
-          location.hash = '#workflow';
+          location.hash = '#operations/detail/' + wr.id;
         });
         tdWr.appendChild(wrLink);
       } else {
@@ -263,7 +319,7 @@ const DMS = {
       tr.appendChild(tdLife);
 
       const tdAct = el('td');
-      const viewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'View' });
+      const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
       viewBtn.addEventListener('click', () => { this.view = 'detail'; this.detailId = doc.id; App.handleRoute(); });
       tdAct.appendChild(viewBtn);
       tr.appendChild(tdAct);
@@ -276,22 +332,123 @@ const DMS = {
 
   renderBoardView(container, docs) {
     const states = ['collected', 'with_documentations', 'scanned', 'in_envelope', 'stored'];
-    const board = el('div', { class: 'board-view' });
+    const stateColors = {
+      'collected': '#94a3b8',
+      'with_documentations': '#3b82f6',
+      'scanned': '#f59e0b',
+      'in_envelope': '#a855f7',
+      'stored': '#10b981'
+    };
+    const canEdit = Auth.can('dms:edit');
+    const self = this;
+
+    // Normalize boardOrder within each lifecycle column.
     states.forEach(state => {
-      const col = el('div', { class: 'board-column' });
-      col.appendChild(el('div', { class: 'board-column-header', text: this.lifecycleLabel(state) }));
       const stateDocs = docs.filter(d => (d.documentLifecycle || 'collected') === state);
-      stateDocs.forEach(doc => {
-        const uploader = DB.getById('users', doc.uploader);
-        const card = el('div', { class: 'board-card' });
-        card.appendChild(el('div', { class: 'board-card-title', text: doc.fileName }));
-        card.appendChild(el('div', { class: 'board-card-meta', text: (uploader?.name || '—') + ' • ' + formatDate(doc.uploadDate) }));
-        card.addEventListener('click', () => { this.view = 'detail'; this.detailId = doc.id; App.handleRoute(); });
-        col.appendChild(card);
+      stateDocs.sort((a, b) => {
+        const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
+        const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
+        if (oa !== null && ob !== null) return oa - ob;
+        if (oa !== null) return -1;
+        if (ob !== null) return 1;
+        return new Date(a.uploadDate || 0) - new Date(b.uploadDate || 0);
       });
-      board.appendChild(col);
+      stateDocs.forEach((doc, idx) => {
+        const newOrder = (idx + 1) * 1000;
+        if (doc.boardOrder !== newOrder) {
+          doc.boardOrder = newOrder;
+          DB.update('documents', doc.id, { boardOrder: newOrder });
+        }
+      });
     });
-    container.appendChild(board);
+
+    let cardNumber = 1;
+
+    KanbanBoard.render({
+      container,
+      items: docs,
+      getColumnKey: doc => doc.documentLifecycle || 'collected',
+      columns: states.map(state => ({
+        key: state,
+        label: self.lifecycleLabel(state),
+        targetStatus: state,
+        color: stateColors[state] || '#cbd5e1',
+        emptyState: { variant: 'compact', title: `No ${self.lifecycleLabel(state).toLowerCase()}`, body: '' }
+      })),
+      renderCard(doc) {
+        const uploader = DB.getById('users', doc.uploader);
+        const badge = self.docTypeBadge(doc.document_type);
+        return buildCompactBoardCard({
+          key: 'DOC-' + cardNumber++,
+          title: doc.fileName,
+          description: uploader?.name || '—',
+          date: doc.uploadDate ? formatDate(doc.uploadDate) : '',
+          statusColor: stateColors[doc.documentLifecycle || 'collected'] || '#cbd5e1',
+          badges: [badge],
+          onClick: () => { self.view = 'detail'; self.detailId = doc.id; App.handleRoute(); }
+        });
+      },
+      cardMenuItems(doc) {
+        const menu = [{
+          label: 'View Details',
+          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+          onClick: () => { self.view = 'detail'; self.detailId = doc.id; App.handleRoute(); }
+        }];
+        const nextState = self.lifecycleNext(doc.documentLifecycle || 'collected');
+        if (canEdit && nextState) {
+          menu.push({
+            label: `Move to ${self.lifecycleLabel(nextState)}`,
+            className: 'primary',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M19 12l-4-4m4 4l-4 4"/></svg>',
+            onClick: () => {
+              const updates = { documentLifecycle: nextState };
+              if (nextState === 'with_documentations') updates.receivedByDocumentationAt = new Date().toISOString();
+              if (nextState === 'scanned') updates.scannedAt = new Date().toISOString();
+              if (nextState === 'in_envelope') updates.storedInEnvelopeAt = new Date().toISOString();
+              if (nextState === 'stored') updates.storedAt = new Date().toISOString();
+              DB.update('documents', doc.id, updates);
+              App.handleRoute();
+            }
+          });
+        }
+        return menu;
+      },
+      drag: {
+        enabled: true,
+        canDrag: () => canEdit,
+        canDrop: ({ item, targetStatus }) => {
+          const currentState = item.documentLifecycle || 'collected';
+          if (currentState === targetStatus) return true;
+          const flow = ['collected', 'with_documentations', 'scanned', 'in_envelope', 'stored'];
+          const currentIdx = flow.indexOf(currentState);
+          const targetIdx = flow.indexOf(targetStatus);
+          if (currentIdx === -1 || targetIdx === -1) return false;
+          return targetIdx > currentIdx;
+        },
+        orderField: 'boardOrder',
+        onDrop({ item, targetStatus, newOrder, fromStatus }) {
+          const currentState = item.documentLifecycle || 'collected';
+          if (currentState === targetStatus) {
+            DB.update('documents', item.id, { boardOrder: newOrder });
+            App.handleRoute();
+            return;
+          }
+
+          const stageLabel = self.lifecycleLabel(targetStatus) || targetStatus;
+          const applyMove = () => {
+            const changes = { boardOrder: newOrder, documentLifecycle: targetStatus };
+            if (targetStatus === 'with_documentations') changes.receivedByDocumentationAt = new Date().toISOString();
+            if (targetStatus === 'scanned') changes.scannedAt = new Date().toISOString();
+            if (targetStatus === 'in_envelope') changes.storedInEnvelopeAt = new Date().toISOString();
+            if (targetStatus === 'stored') changes.storedAt = new Date().toISOString();
+            DB.update('documents', item.id, changes);
+            App.handleRoute();
+          };
+
+          Workflow.showConfirm('Confirm Lifecycle Change', `Move "${item.fileName}" to "${stageLabel}"?`, applyMove, 'success');
+        }
+      }
+    });
   },
 
   renderCompactListView(container, docs) {
@@ -303,7 +460,7 @@ const DMS = {
       left.appendChild(el('div', { class: 'list-item-title', text: doc.fileName }));
       left.appendChild(el('div', { class: 'list-item-meta', text: (uploader?.name || '—') + ' • ' + formatDate(doc.uploadDate) }));
       item.appendChild(left);
-      const viewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'View' });
+      const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
       viewBtn.addEventListener('click', () => { this.view = 'detail'; this.detailId = doc.id; App.handleRoute(); });
       item.appendChild(viewBtn);
       list.appendChild(item);
@@ -322,7 +479,7 @@ const DMS = {
     const headerBar = el('div', { class: 'form-header-bar' });
     headerBar.appendChild(el('h2', { text: 'Upload Document' }));
     const headerActions = el('div', { class: 'form-actions-top' });
-    const cancelBtn = el('button', { type: 'button', class: 'btn btn-ghost', text: 'Cancel' });
+    const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
     cancelBtn.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
     headerActions.appendChild(cancelBtn);
     headerBar.appendChild(headerActions);
@@ -496,8 +653,8 @@ const DMS = {
   // Detail View
   // ============================================================
   renderDetail() {
-    // Only Admin users may view document details
-    if (Auth.user.role !== 'Admin') {
+    // Only roles with dms:edit or dms:handover may view document details
+    if (!Auth.can('dms:edit') && !Auth.can('dms:handover')) {
       this.view = 'list';
       App.handleRoute();
       return el('div');
@@ -514,7 +671,7 @@ const DMS = {
 
     // Top actions bar
     const topActions = el('div', { class: 'actions-bar', style: 'margin-bottom: var(--spacing-lg);' });
-    const topBackBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '← Back to List' });
+    const topBackBtn = el('button', { class: 'btn btn-secondary btn-sm', text: '← Back to List' });
     topBackBtn.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
     topActions.appendChild(topBackBtn);
     container.appendChild(topActions);
@@ -608,7 +765,7 @@ const DMS = {
       commentsSection.appendChild(el('p', { class: 'empty-state', text: 'No comments yet.' }));
     }
 
-    if (Auth.user.role === 'Admin') {
+    if (Auth.can('dms:edit')) {
       const commentForm = el('form', { class: 'form-stacked' });
       const textGroup = el('div', { class: 'form-group' });
       textGroup.appendChild(el('label', { text: 'Add Comment' }));
@@ -690,7 +847,7 @@ const DMS = {
 
         const hfBtnGroup = el('div', { class: 'form-group form-actions' });
         const saveBtn = el('button', { type: 'submit', class: 'btn btn-success', text: 'Save Handover' });
-        const cancelHfBtn = el('button', { type: 'button', class: 'btn btn-ghost', text: 'Cancel' });
+        const cancelHfBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
         cancelHfBtn.addEventListener('click', () => {
           handoverForm.classList.add('hidden');
           recordBtn.classList.remove('hidden');

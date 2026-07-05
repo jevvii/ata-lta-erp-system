@@ -1,21 +1,25 @@
 /**
  * Admin Review Gate — Pending Changes
- * Structural mutations are staged for Admin/Manager approval.
+ * Structural mutations are staged for Admin approval.
+ * All non-Admin roles (Manager, Accounting, Operations, Documentation, HR)
+ * stage changes in pendingChanges for Admin review.
  */
 
 const PendingChanges = {
   /**
    * Submit a structural change for review.
-   * Admin/Manager bypass the gate and save directly.
-   * Staff/Viewer stage changes in pendingChanges.
+   * Admin bypasses the gate for everything.
+   * Manager bypasses for tasks only (WRs still need Admin approval).
+   * All other roles stage changes in pendingChanges.
    */
-  submit(table, record, isNew) {
-    const role = Auth.user?.role;
-    if (role === 'Admin' || role === 'Manager') {
+   submit(table, record, isNew) {
+    if (Auth.canBypassReview(table)) {
+      const cleanRecord = { ...record };
+      delete cleanRecord.tasks;
       if (isNew) {
-        DB.insert(table, record);
+        DB.insert(table, cleanRecord);
       } else {
-        DB.update(table, record.id, record);
+        DB.update(table, cleanRecord.id, cleanRecord);
       }
       return { approved: true };
     }
@@ -52,14 +56,49 @@ const PendingChanges = {
     return DB.getById('pendingChanges', id);
   },
 
+  /**
+   * Determine if the current user can approve a given pending change.
+   * Admin can approve everything.
+   * Manager can approve pending tasks (from staff).
+   */
+  canApproveChange(pc) {
+    if (!pc) return false;
+    return Auth.canApproveChange(pc.table);
+  },
+
   approve(pendingId) {
     const pc = DB.getById('pendingChanges', pendingId);
     if (!pc || pc.status !== 'pending') return false;
 
-    if (pc.parentRecordId) {
-      DB.update(pc.table, pc.parentRecordId, pc.proposedData);
+    if (pc.table === 'workRequests') {
+      const record = deepClone(pc.proposedData);
+      const tasks = record.tasks || [];
+      delete record.tasks;
+
+      if (pc.parentRecordId) {
+        DB.update('workRequests', pc.parentRecordId, record);
+        // Clear existing tasks
+        const existing = DB.getWhere('tasks', t => t.workRequestId === pc.parentRecordId);
+        existing.forEach(t => DB.delete('tasks', t.id));
+        // Insert updated tasks
+        tasks.forEach(t => {
+          t.workRequestId = pc.parentRecordId;
+          DB.insert('tasks', t);
+        });
+      } else {
+        DB.insert('workRequests', record);
+        // Insert new tasks
+        tasks.forEach(t => {
+          t.workRequestId = record.id;
+          DB.insert('tasks', t);
+        });
+      }
     } else {
-      DB.insert(pc.table, pc.proposedData);
+      if (pc.parentRecordId) {
+        DB.update(pc.table, pc.parentRecordId, pc.proposedData);
+      } else {
+        DB.insert(pc.table, pc.proposedData);
+      }
     }
 
     // Back-linking logic upon approval

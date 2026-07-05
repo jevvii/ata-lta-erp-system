@@ -11,67 +11,41 @@ const Clients = {
     if (!this.activeTab) this.activeTab = 'active';
     const container = el('div', { class: 'page' });
     
-    if (this.editingId) {
-      const isNew = this.editingId === 'new';
-      const c = isNew ? null : DB.getById('clients', this.editingId);
-      const titleBar = el('div', { class: 'page-title-bar-v2' });
-      const h1 = el('h1', { class: 'breadcrumb-h1' });
-      const baseLink = el('a', { href: 'javascript:void(0)', class: 'breadcrumb-base', text: 'Clients' });
-      baseLink.addEventListener('click', () => { this.editingId = null; App.handleRoute(); });
-      h1.appendChild(baseLink);
-      h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
-      h1.appendChild(document.createTextNode(isNew ? 'New Client' : (c?.name || 'Edit Client')));
-      titleBar.appendChild(h1);
-      
-      const backBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '← Back to List' });
-      backBtn.addEventListener('click', () => { this.editingId = null; App.handleRoute(); });
-      titleBar.appendChild(backBtn);
-      container.appendChild(titleBar);
+    container.classList.add('clients-tab-page');
+    const titleBar = el('div', { class: 'page-title-bar-v2' });
+    titleBar.appendChild(el('h1', { text: 'Clients' }));
+    container.appendChild(titleBar);
+    container.appendChild(this.renderTabNav());
 
-      const formContainer = el('div', { class: 'form-container' });
-      container.appendChild(formContainer);
-      this.renderForm(formContainer, this.editingId);
-
-      return container;
-    } else {
-      container.appendChild(el('h1', { text: 'Clients' }));
-    }
-
-    // Tabs
-    const tabs = el('div', { class: 'admin-tabs clients-tabs-bar', style: 'margin-bottom: 20px;' });
-    const activeTabBtn = el('button', {
-      class: 'btn ' + (this.activeTab === 'active' ? 'btn-primary' : 'btn-ghost'),
-      text: 'Active Clients'
+    // Toolbar (Sticky Container)
+    const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
+    const filters = el('div', { class: 'filters-bar' });
+    const searchWrapper = el('div', { style: 'position: relative; display: flex; align-items: center; width: 100%; max-width: 320px;' });
+    
+    const searchIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    searchIcon.setAttribute('width', '14');
+    searchIcon.setAttribute('height', '14');
+    searchIcon.setAttribute('viewBox', '0 0 24 24');
+    searchIcon.setAttribute('fill', 'none');
+    searchIcon.setAttribute('stroke', 'currentColor');
+    searchIcon.setAttribute('stroke-width', '2.5');
+    searchIcon.setAttribute('stroke-linecap', 'round');
+    searchIcon.setAttribute('stroke-linejoin', 'round');
+    searchIcon.setAttribute('style', 'position: absolute; left: 12px; color: var(--color-text-muted); pointer-events: none;');
+    searchIcon.innerHTML = '<circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>';
+    
+    const search = el('input', {
+      type: 'text',
+      placeholder: 'Search by taxpayer, trade name, or TIN...',
+      class: 'form-control search-input',
+      style: 'width: 100%; padding-left: 36px; max-width: 320px;'
     });
-    activeTabBtn.addEventListener('click', () => {
-      this.activeTab = 'active';
-      this.showList();
-    });
-    tabs.appendChild(activeTabBtn);
-
-    const archivedTabBtn = el('button', {
-      class: 'btn ' + (this.activeTab === 'archived' ? 'btn-primary' : 'btn-ghost'),
-      text: 'Archived Clients'
-    });
-    archivedTabBtn.addEventListener('click', () => {
-      this.activeTab = 'archived';
-      this.showList();
-    });
-    tabs.appendChild(archivedTabBtn);
-    container.appendChild(tabs);
-
-    const actions = el('div', { class: 'actions-bar' + (this.activeTab === 'archived' ? ' hidden' : '') });
-
-    if (Auth.can('clients:edit')) {
-      const addBtn = el('button', { class: 'btn btn-primary', text: 'Add Client' });
-      addBtn.addEventListener('click', () => this.showForm());
-      actions.appendChild(addBtn);
-    }
-
-    const search = el('input', { type: 'text', placeholder: 'Search by taxpayer or TIN...', class: 'search-input' });
-    search.addEventListener('input', debounce(() => this.renderList(listContainer, search.value.trim()), 200));
-    actions.appendChild(search);
-    container.appendChild(actions);
+    
+    searchWrapper.appendChild(searchIcon);
+    searchWrapper.appendChild(search);
+    filters.appendChild(searchWrapper);
+    stickyContainer.appendChild(filters);
+    container.appendChild(stickyContainer);
 
     const listContainer = el('div', { class: 'list-container' + (this.activeTab === 'archived' ? ' hidden' : '') });
     container.appendChild(listContainer);
@@ -82,16 +56,99 @@ const Clients = {
     const archiveContainer = el('div', { class: 'archive-container' + (this.activeTab === 'active' ? ' hidden' : '') });
     container.appendChild(archiveContainer);
     if (this.activeTab === 'archived') {
-      this.renderArchive(archiveContainer);
+      this.renderArchive(archiveContainer, '');
     }
+
+    search.addEventListener('input', debounce(() => {
+      const q = search.value.trim();
+      if (this.activeTab === 'active') {
+        this.renderList(listContainer, q);
+      } else {
+        this.renderArchive(archiveContainer, q);
+      }
+    }, 200));
 
     const formContainer = el('div', { class: 'form-container hidden' });
     container.appendChild(formContainer);
 
+    // Full-page form route: when editingId is set (e.g. from #clients/form/:id),
+    // render the form inline instead of the list/archive tab content.
+    if (this.editingId) {
+      while (container.firstChild) container.removeChild(container.firstChild);
+      container.classList.add('clients-tab-page');
+      const isNew = this.editingId === 'new';
+      const client = isNew ? null : DB.getById('clients', this.editingId);
+      container.appendChild(buildFormBreadcrumb({
+        baseLabel: 'Clients',
+        baseHash: '#clients',
+        currentText: isNew ? 'Add Client' : (client?.name || 'Edit Client'),
+        actions: [
+          { text: '← Back to Clients', class: 'btn btn-secondary btn-sm', onClick: () => { this.editingId = null; location.hash = '#clients'; } }
+        ]
+      }));
+      container.appendChild(this.renderForm(el('div'), this.editingId));
+    }
+
+    setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
   },
 
-  init() {},
+  init() {
+    this.updateStickyOffsets();
+  },
+
+  updateStickyOffsets() {
+    App.updateStickyOffsets();
+  },
+
+  renderTabNav() {
+    const tabNav = el('div', { class: 'module-tab-nav' });
+
+    const entity = Auth.activeEntity;
+    const activeCount = DB.getWhere('clients', c => {
+      const cEnt = (c.entity || '').toUpperCase();
+      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
+      return matchesEntity && c.status !== 'Archived';
+    }).length;
+
+    const archivedCount = DB.getWhere('clients', c => {
+      const cEnt = (c.entity || '').toUpperCase();
+      const matchesEntity = (entity === 'ALL' ? Auth.user.entities.map(ae => ae.toUpperCase()).includes(cEnt) : cEnt === entity.toUpperCase());
+      return matchesEntity && c.status === 'Archived';
+    }).length;
+
+    const tabs = [
+      { key: 'active', label: 'Active Clients', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>', count: activeCount },
+      { key: 'archived', label: 'Archive', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"></polyline><rect x="1" y="3" width="22" height="5"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>', count: archivedCount }
+    ];
+
+    tabs.forEach(tab => {
+      const btn = el('button', { class: 'module-tab-link' + (this.activeTab === tab.key ? ' active' : '') });
+      btn.appendChild(parseHTML(tab.icon));
+      btn.appendChild(document.createTextNode(' ' + tab.label));
+      if (tab.count !== undefined) {
+        btn.appendChild(document.createTextNode(' '));
+        btn.appendChild(el('span', { class: 'module-badge-count', text: String(tab.count) }));
+      }
+      btn.addEventListener('click', () => {
+        this.activeTab = tab.key;
+        App.handleRoute();
+      });
+      tabNav.appendChild(btn);
+    });
+
+    if (Auth.can('clients:edit') && this.activeTab === 'active') {
+      const addBtn = el('button', {
+        class: 'btn btn-primary btn-sm',
+        style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;',
+        html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New Client'
+      });
+      addBtn.addEventListener('click', () => this.showForm());
+      tabNav.appendChild(addBtn);
+    }
+
+    return tabNav;
+  },
 
   clearNode(node) {
     while (node.firstChild) node.removeChild(node.firstChild);
@@ -110,25 +167,6 @@ const Clients = {
         (c.tradeName || '').toLowerCase().includes(q) ||
         (c.tin || '').toLowerCase().includes(q)
       );
-    }
-
-    // Staff visibility filter
-    const role = Auth.user.role;
-    if (role === 'Staff') {
-      const userId = Auth.user.id;
-      const tasks = DB.getAll('tasks');
-      const workRequests = DB.getAll('workRequests');
-      // Find clients where user is assigned to any task
-      const assignedClientIds = new Set();
-      tasks.forEach(t => {
-        if (t.assigneeId === userId) {
-          const wr = workRequests.find(w => w.id === t.workRequestId);
-          if (wr) assignedClientIds.add(wr.clientId);
-        }
-      });
-      clients = clients.filter(c => c.contactUserId === userId || assignedClientIds.has(c.id));
-    } else if (role === 'Viewer') {
-      // Viewer can see all clients in entity (existing behavior)
     }
 
     return clients;
@@ -180,20 +218,20 @@ const Clients = {
       row.appendChild(el('td', { text: (c.retainer || c.isRetainer) ? 'Yes' : 'No' }));
       const actions = el('td');
       if (Auth.can('clients:edit')) {
-        const editBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'Edit' });
+        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
         editBtn.addEventListener('click', () => this.showForm(c.id));
         actions.appendChild(editBtn);
       }
       
-      const role = Auth.user.role;
-      if (role === 'Admin' || role === 'Manager') {
+      if (Auth.can('clients:edit')) {
         const archiveBtn = el('button', { 
-          class: 'btn btn-ghost btn-sm', 
+          class: 'btn btn-secondary btn-sm text-danger', 
           text: 'Archive', 
-          style: 'color: var(--color-danger); margin-left: 8px;' 
+          style: 'margin-left: 8px;' 
         });
         archiveBtn.addEventListener('click', () => {
-          if (role === 'Admin') {
+          // Admin bypasses PendingChanges — intentional direct-role check (Gap 6)
+          if (Auth.user.role === 'Admin') {
             this.archiveClientDirectly(c.id);
           } else {
             this.archiveClientRequest(c.id);
@@ -211,75 +249,88 @@ const Clients = {
 
   showForm(clientId) {
     this.editingId = clientId || 'new';
-    App.handleRoute();
+    const isNew = this.editingId === 'new';
+    const client = isNew ? null : DB.getById('clients', this.editingId);
+    const fullPageRoute = isNew ? '#clients/form/new' : `#clients/form/${clientId}`;
+
+    const formContainer = el('div', { class: 'form-container' });
+    this.renderForm(formContainer, this.editingId);
+
+    openFormPanel({
+      icon: '🏢',
+      title: isNew ? 'Add Client' : (client?.name || 'Edit Client'),
+      formContent: formContainer,
+      formId: 'client-form',
+      viewContext: 'client-form',
+      fullPageRoute,
+      newTabRoute: fullPageRoute,
+      actions: [
+        { text: isNew ? 'Save Client' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'client-form', testId: 'client-save' },
+        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => this.showList(), testId: 'client-cancel' }
+      ]
+    });
   },
 
   renderForm(container, clientId) {
     const client = clientId && clientId !== 'new' ? DB.getById('clients', clientId) : null;
     this.clearNode(container);
 
-    // Form header bar
+    // Form header bar (actions only; title is handled by the inline title input
+    // and by the full-page breadcrumb header)
     const headerBar = el('div', { class: 'form-header-bar' });
-    headerBar.appendChild(el('h2', { text: client ? 'Edit Client' : 'Add Client' }));
     const headerActions = el('div', { class: 'form-actions-top' });
     const saveBtnTop = el('button', { type: 'submit', form: 'client-form', class: 'btn btn-primary', text: client ? 'Save Changes' : 'Save Client' });
     headerActions.appendChild(saveBtnTop);
-    const cancelBtn = el('button', { type: 'button', class: 'btn btn-ghost', text: 'Cancel' });
+    const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
     cancelBtn.addEventListener('click', () => this.showList());
     headerActions.appendChild(cancelBtn);
     headerBar.appendChild(headerActions);
     container.appendChild(headerBar);
 
-    const form = el('form', { id: 'client-form', class: 'form-stacked' });
+    const form = el('form', { id: 'client-form', class: 'form-stacked notion-form' });
 
-    // Taxpayer name
-    const nameGroup = el('div', { class: 'form-group' });
-    nameGroup.appendChild(el('label', { text: 'Taxpayer *' }));
-    const nameInput = el('input', { type: 'text', name: 'name', required: true, value: client ? (client.name || '') : '' });
-    nameGroup.appendChild(nameInput);
-    form.appendChild(nameGroup);
+    // ── Identity free-form block ──
+    const identitySection = el('div', { class: 'notion-freeform notion-freeform--title' });
+    identitySection.appendChild(el('label', { class: 'notion-section-label', text: 'Client Name' }));
+    const nameInput = el('input', { type: 'text', name: 'name', class: 'notion-freeform-input notion-title-input', placeholder: 'Taxpayer / company name', required: true, value: client ? (client.name || '') : '' });
+    identitySection.appendChild(nameInput);
+    if (!client) {
+      setTimeout(() => { nameInput.focus(); nameInput.select(); }, 60);
+    }
+    form.appendChild(identitySection);
 
-    // TIN
-    const tinGroup = el('div', { class: 'form-group' });
-    tinGroup.appendChild(el('label', { text: 'TIN *' }));
-    const tinInput = el('input', { type: 'text', name: 'tin', required: true, placeholder: 'XXX-XXX-XXX-XXXX', value: client ? (client.tin || '') : '' });
-    tinGroup.appendChild(tinInput);
-    form.appendChild(tinGroup);
+    // ── Property grid ──
+    const propsGrid = el('div', { class: 'notion-property-grid' });
 
-    // Trade Name
-    const tradeGroup = el('div', { class: 'form-group' });
-    tradeGroup.appendChild(el('label', { text: 'Trade Name' }));
-    const tradeInput = el('input', { type: 'text', name: 'tradeName', value: client ? (client.tradeName || '') : '' });
-    tradeGroup.appendChild(tradeInput);
-    form.appendChild(tradeGroup);
+    const tinProp = el('div', { class: 'notion-prop' });
+    tinProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> TIN' }));
+    tinProp.appendChild(el('input', { type: 'text', name: 'tin', class: 'notion-prop-input', placeholder: 'XXX-XXX-XXX-XXXX', required: true, value: client ? (client.tin || '') : '' }));
+    propsGrid.appendChild(tinProp);
 
-    // Business Address
-    const addrGroup = el('div', { class: 'form-group' });
-    addrGroup.appendChild(el('label', { text: 'Business Address' }));
-    const addrInput = el('input', { type: 'text', name: 'address', value: client ? (client.address || '') : '' });
-    addrGroup.appendChild(addrInput);
-    form.appendChild(addrGroup);
+    const tradeProp = el('div', { class: 'notion-prop' });
+    tradeProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 22h20M2 6h20M2 10h20M2 14h20"/></svg> Trade Name' }));
+    tradeProp.appendChild(el('input', { type: 'text', name: 'tradeName', class: 'notion-prop-input', placeholder: 'e.g. DBA name', value: client ? (client.tradeName || '') : '' }));
+    propsGrid.appendChild(tradeProp);
 
-    // Point of Contact (combobox)
-    const pocGroup = el('div', { class: 'form-group' });
-    pocGroup.appendChild(el('label', { text: 'Point of Contact' }));
-    
-    const pocInput = el('input', { 
-      type: 'text', 
-      name: 'pointOfContactInput', 
-      list: 'staff-list', 
-      placeholder: '— Select or type Staff —'
+    const entityProp = el('div', { class: 'notion-prop' });
+    entityProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Entity' }));
+    const entitySel = el('select', { name: 'entity', class: 'notion-prop-select', required: true });
+    ['ATA', 'LTA'].forEach(e => {
+      const opt = el('option', { value: e, text: e });
+      if (client ? client.entity === e : Auth.activeEntity === e) opt.selected = true;
+      entitySel.appendChild(opt);
     });
+    entityProp.appendChild(entitySel);
+    propsGrid.appendChild(entityProp);
+
+    const pocProp = el('div', { class: 'notion-prop' });
+    pocProp.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Point of Contact' }));
+    const pocInput = el('input', { type: 'text', name: 'pointOfContactInput', class: 'notion-prop-input', list: 'staff-list', placeholder: '— Select or type Staff —' });
     const datalist = el('datalist', { id: 'staff-list' });
-
-    const entityUsers = DB.getWhere('users', u => {
+    DB.getWhere('users', u => {
       const userEntities = (u.entities || []).map(e => e.toUpperCase());
-      return ['Admin', 'Manager', 'Staff'].includes(u.role) && userEntities.includes(Auth.activeEntity);
-    });
-    entityUsers.forEach(u => {
-      datalist.appendChild(el('option', { value: u.name + ' (' + u.role + ')' }));
-    });
-    
+      return Auth.ALL_ROLES.includes(u.role) && userEntities.includes(Auth.activeEntity);
+    }).forEach(u => { datalist.appendChild(el('option', { value: u.name + ' (' + u.role + ')' })); });
     if (client) {
       if (client.contactUserId) {
         const u = DB.getById('users', client.contactUserId);
@@ -288,59 +339,50 @@ const Clients = {
         pocInput.value = client.contactPerson;
       }
     }
-    
-    pocGroup.appendChild(pocInput);
-    pocGroup.appendChild(datalist);
-    form.appendChild(pocGroup);
+    pocProp.appendChild(pocInput);
+    pocProp.appendChild(datalist);
+    propsGrid.appendChild(pocProp);
 
-    // Contact Details (multi-entry)
-    const cdSection = el('div', { class: 'form-section' });
-    cdSection.appendChild(el('h3', { text: 'Contact Details' }));
-    const cdContainer = el('div', { id: 'contact-details-container' });
-    const contactDetails = client && Array.isArray(client.contactDetails) ? client.contactDetails : [];
-    contactDetails.forEach((cd, idx) => this.addContactDetailRow(cdContainer, cd, idx));
-    cdSection.appendChild(cdContainer);
-    const addCdBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '+ Add Contact Detail' });
-    addCdBtn.addEventListener('click', () => this.addContactDetailRow(cdContainer, null, cdContainer.childElementCount));
-    cdSection.appendChild(addCdBtn);
-    form.appendChild(cdSection);
-
-    // Related Companies (multi-entry)
-    const rcSection = el('div', { class: 'form-section' });
-    rcSection.appendChild(el('h3', { text: 'Related Companies' }));
-    const rcContainer = el('div', { id: 'related-companies-container' });
-    const relatedCompanies = client && Array.isArray(client.relatedCompanies) ? client.relatedCompanies : [];
-    relatedCompanies.forEach((rc, idx) => this.addRelatedCompanyRow(rcContainer, rc, idx));
-    rcSection.appendChild(rcContainer);
-    const addRcBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '+ Add Related Company' });
-    addRcBtn.addEventListener('click', () => this.addRelatedCompanyRow(rcContainer, null, rcContainer.childElementCount));
-    rcSection.appendChild(addRcBtn);
-    form.appendChild(rcSection);
-
-    // Entity radio
-    const entityGroup = el('div', { class: 'form-group' });
-    entityGroup.appendChild(el('label', { text: 'Entity *' }));
-    const radioWrap = el('div', { class: 'radio-group' });
-    ['ATA', 'LTA'].forEach(e => {
-      const label = el('label', { class: 'radio-label' });
-      const radio = el('input', { type: 'radio', name: 'entity', value: e, required: true });
-      if (client ? client.entity === e : Auth.activeEntity === e) radio.checked = true;
-      label.appendChild(radio);
-      label.appendChild(document.createTextNode(' ' + e));
-      radioWrap.appendChild(label);
-    });
-    entityGroup.appendChild(radioWrap);
-    form.appendChild(entityGroup);
-
-    // Retainer checkbox
-    const retainerGroup = el('div', { class: 'form-group' });
+    const retainerProp = el('div', { class: 'notion-prop notion-prop-checkbox' });
     const retainerLabel = el('label', { class: 'checkbox-label' });
     const retainerCb = el('input', { type: 'checkbox', name: 'retainer' });
     if (client && (client.retainer || client.isRetainer)) retainerCb.checked = true;
     retainerLabel.appendChild(retainerCb);
-    retainerLabel.appendChild(document.createTextNode(' This client is on retainer'));
-    retainerGroup.appendChild(retainerLabel);
-    form.appendChild(retainerGroup);
+    retainerLabel.appendChild(document.createTextNode(' On retainer'));
+    retainerProp.appendChild(retainerLabel);
+    propsGrid.appendChild(retainerProp);
+
+    form.appendChild(propsGrid);
+
+    // Address free-form
+    const addrSection = el('div', { class: 'notion-freeform' });
+    addrSection.appendChild(el('label', { class: 'notion-section-label', text: 'Business Address' }));
+    addrSection.appendChild(el('input', { type: 'text', name: 'address', class: 'notion-freeform-input', placeholder: 'Enter business address', value: client ? (client.address || '') : '' }));
+    form.appendChild(addrSection);
+
+    // Contact Details (multi-entry) — Notion-style
+    form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Contact Details' }));
+    const cdSection = el('div', { class: 'notion-line-items' });
+    const cdContainer = el('div', { id: 'contact-details-container' });
+    const contactDetails = client && Array.isArray(client.contactDetails) ? client.contactDetails : [];
+    contactDetails.forEach((cd, idx) => this.addContactDetailRow(cdContainer, cd, idx));
+    cdSection.appendChild(cdContainer);
+    const addCdBtn = el('button', { type: 'button', class: 'notion-add-line-item', text: '+ Add Contact Detail' });
+    addCdBtn.addEventListener('click', () => this.addContactDetailRow(cdContainer, null, cdContainer.childElementCount));
+    cdSection.appendChild(addCdBtn);
+    form.appendChild(cdSection);
+
+    // Related Companies (multi-entry) — Notion-style
+    form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Related Companies' }));
+    const rcSection = el('div', { class: 'notion-line-items' });
+    const rcContainer = el('div', { id: 'related-companies-container' });
+    const relatedCompanies = client && Array.isArray(client.relatedCompanies) ? client.relatedCompanies : [];
+    relatedCompanies.forEach((rc, idx) => this.addRelatedCompanyRow(rcContainer, rc, idx));
+    rcSection.appendChild(rcContainer);
+    const addRcBtn = el('button', { type: 'button', class: 'notion-add-line-item', text: '+ Add Related Company' });
+    addRcBtn.addEventListener('click', () => this.addRelatedCompanyRow(rcContainer, null, rcContainer.childElementCount));
+    rcSection.appendChild(addRcBtn);
+    form.appendChild(rcSection);
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -348,17 +390,26 @@ const Clients = {
     });
 
     container.appendChild(form);
+    return container;
   },
 
   addContactDetailRow(container, data, idx) {
-    const row = el('div', { class: 'multi-entry-row' });
-    const typeSel = el('select', { class: 'form-select', name: 'cd-type-' + idx, style: 'flex: 0 0 120px;' });
+    const row = el('div', { class: 'notion-line-item-row notion-sub-row' });
+
+    const dragHandle = el('div', {
+      class: 'notion-line-item-drag',
+      title: 'Drag to reorder',
+      html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>'
+    });
+    row.appendChild(dragHandle);
+
+    const typeSel = el('select', { class: 'notion-line-item-type', name: 'cd-type-' + idx, style: 'flex: 0 0 100px;' });
     ['mobile', 'landline', 'email'].forEach(t => {
       typeSel.appendChild(el('option', { value: t, text: t.charAt(0).toUpperCase() + t.slice(1) }));
     });
     if (data && data.type) typeSel.value = data.type;
-    const valueInput = el('input', { type: 'text', placeholder: 'Value', name: 'cd-value-' + idx, value: data ? (data.value || '') : '' });
-    
+    const valueInput = el('input', { type: 'text', class: 'notion-line-item-desc', placeholder: 'Value', name: 'cd-value-' + idx, value: data ? (data.value || '') : '' });
+
     const updatePlaceholder = () => {
       if (typeSel.value === 'mobile') {
         valueInput.placeholder = 'e.g. 09123456789 (11 digits)';
@@ -370,23 +421,25 @@ const Clients = {
         valueInput.placeholder = 'e.g. user@theiremail.com';
         valueInput.removeAttribute('maxLength');
       }
-      // Re-trigger restriction on type change if value exists
-      if (valueInput.value) {
-        valueInput.dispatchEvent(new Event('input'));
-      }
+      if (valueInput.value) valueInput.dispatchEvent(new Event('input'));
     };
-    
+
     valueInput.addEventListener('input', (e) => {
       if (typeSel.value === 'mobile' || typeSel.value === 'landline') {
-        e.target.value = e.target.value.replace(/\D/g, ''); // Remove non-digits
+        e.target.value = e.target.value.replace(/\D/g, '');
       }
     });
 
     typeSel.addEventListener('change', updatePlaceholder);
     updatePlaceholder();
 
-    const labelInput = el('input', { type: 'text', placeholder: 'Label (e.g. Work, Home)', name: 'cd-label-' + idx, value: data ? (data.label || '') : '' });
-    const removeBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'Remove' });
+    const labelInput = el('input', { type: 'text', class: 'notion-line-item-desc', style: 'flex: 0 0 140px;', placeholder: 'Label', name: 'cd-label-' + idx, value: data ? (data.label || '') : '' });
+    const removeBtn = el('button', {
+      type: 'button',
+      class: 'notion-line-item-remove',
+      title: 'Remove',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+    });
     removeBtn.addEventListener('click', () => row.remove());
     row.appendChild(typeSel);
     row.appendChild(valueInput);
@@ -396,21 +449,34 @@ const Clients = {
   },
 
   addRelatedCompanyRow(container, data, idx) {
-    const row = el('div', { class: 'multi-entry-row' });
+    const row = el('div', { class: 'notion-line-item-row notion-sub-row' });
+
+    const dragHandle = el('div', {
+      class: 'notion-line-item-drag',
+      title: 'Drag to reorder',
+      html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>'
+    });
+    row.appendChild(dragHandle);
+
     const entity = Auth.activeEntity;
-    const clientSel = el('select', { class: 'form-select', name: 'rc-client-' + idx });
+    const clientSel = el('select', { class: 'notion-line-item-type', name: 'rc-client-' + idx, style: 'flex: 1 1 auto; min-width: 160px;' });
     clientSel.appendChild(el('option', { value: '', text: '— Select Client —' }));
     DB.getWhere('clients', c => c.entity === entity).forEach(c => {
-      if (this.editingId && c.id === this.editingId) return; // skip self
+      if (this.editingId && c.id === this.editingId) return;
       clientSel.appendChild(el('option', { value: c.id, text: c.name }));
     });
     if (data && data.clientId) clientSel.value = data.clientId;
-    const relSel = el('select', { class: 'form-select', name: 'rc-relation-' + idx, style: 'flex: 0 0 160px;' });
+    const relSel = el('select', { class: 'notion-line-item-type', name: 'rc-relation-' + idx, style: 'flex: 0 0 150px;' });
     ['Parent', 'Subsidiary', 'Sister Company', 'Affiliate'].forEach(r => {
       relSel.appendChild(el('option', { value: r, text: r }));
     });
     if (data && data.relationType) relSel.value = data.relationType;
-    const removeBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'Remove' });
+    const removeBtn = el('button', {
+      type: 'button',
+      class: 'notion-line-item-remove',
+      title: 'Remove',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+    });
     removeBtn.addEventListener('click', () => row.remove());
     row.appendChild(clientSel);
     row.appendChild(relSel);
@@ -420,7 +486,7 @@ const Clients = {
 
   showList() {
     this.editingId = null;
-    App.handleRoute();
+    closeFormPanelAndRoute('#clients');
   },
 
   submitForm(form) {
@@ -434,18 +500,17 @@ const Clients = {
       return;
     }
 
-    const entityRadio = form.querySelector('input[name="entity"]:checked');
-    if (!entityRadio) {
-      showFieldError(form.querySelector('input[name="entity"]'), 'Entity is required.');
+    const entityRadio = form.querySelector('[name="entity"]:checked, select[name="entity"]');
+    if (!entityRadio || !entityRadio.value) {
+      showFieldError(entityRadio || form.querySelector('[name="entity"]'), 'Entity is required.');
       return;
     }
-
     // Collect contact details
     const contactDetails = [];
     let hasContactError = false;
     const cdContainer = document.getElementById('contact-details-container');
     if (cdContainer) {
-      cdContainer.querySelectorAll('.multi-entry-row').forEach(row => {
+      cdContainer.querySelectorAll('.notion-sub-row').forEach(row => {
         const valueInput = row.querySelector('input[name^="cd-value-"]');
         const labelInput = row.querySelector('input[name^="cd-label-"]');
         if (!valueInput || !labelInput) return;
@@ -485,7 +550,7 @@ const Clients = {
     const relatedCompanies = [];
     const rcContainer = document.getElementById('related-companies-container');
     if (rcContainer) {
-      rcContainer.querySelectorAll('.multi-entry-row').forEach(row => {
+      rcContainer.querySelectorAll('.notion-sub-row').forEach(row => {
         const clientId = row.querySelector('select[name^="rc-client-"]')?.value;
         const relationType = row.querySelector('select[name^="rc-relation-"]')?.value;
         if (clientId && relationType) {
@@ -513,7 +578,7 @@ const Clients = {
       address: data.address ? data.address.trim() : '',
       tradeName: data.tradeName ? data.tradeName.trim() : '',
       contactUserId,
-      entity: entityRadio.value,
+      entity: data.entity || (Auth.activeEntity !== 'ALL' ? Auth.activeEntity : 'ATA'),
       retainer: !!form.querySelector('input[name="retainer"]:checked'),
       contactDetails,
       relatedCompanies
@@ -537,7 +602,16 @@ const Clients = {
       PendingChanges.submit('clients', record, true);
     }
 
-    this.showList();
+    const isNew = !this.editingId || this.editingId === 'new';
+    const isApproved = Auth.user.role === 'Admin' || Auth.user.role === 'Manager';
+    const msgConfig = {
+      title: isNew ? 'Client Created' : 'Client Updated',
+      message: isApproved 
+        ? `Client ${record.name} has been successfully ${isNew ? 'created' : 'updated'}.` 
+        : `Client ${record.name} ${isNew ? 'creation' : 'update'} request has been submitted for Admin approval.`,
+      type: 'success'
+    };
+    closeFormPanelAndRoute('#clients', msgConfig);
   },
 
   archiveClientDirectly(clientId) {
@@ -607,34 +681,28 @@ const Clients = {
     App.handleRoute();
   },
 
-  getArchivedClients() {
+  getArchivedClients(query) {
     const entity = Auth.activeEntity;
     let clients = DB.getWhere('clients', c => {
       const matchesEntity = (entity === 'ALL' ? Auth.user.entities.includes(c.entity) : c.entity === entity);
       return matchesEntity && c.status === 'Archived';
     });
 
-    // Staff visibility filter
-    const role = Auth.user.role;
-    if (role === 'Staff') {
-      const userId = Auth.user.id;
-      const tasks = DB.getAll('tasks');
-      const workRequests = DB.getAll('workRequests');
-      const assignedClientIds = new Set();
-      tasks.forEach(t => {
-        if (t.assigneeId === userId) {
-          const wr = workRequests.find(w => w.id === t.workRequestId);
-          if (wr) assignedClientIds.add(wr.clientId);
-        }
-      });
-      clients = clients.filter(c => c.contactUserId === userId || assignedClientIds.has(c.id));
+    if (query) {
+      const q = query.toLowerCase();
+      clients = clients.filter(c =>
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.tradeName || '').toLowerCase().includes(q) ||
+        (c.tin || '').toLowerCase().includes(q)
+      );
     }
+
     return clients;
   },
 
-  renderArchive(container) {
+  renderArchive(container, query) {
     this.clearNode(container);
-    const archivedClients = this.getArchivedClients();
+    const archivedClients = this.getArchivedClients(query);
 
     if (archivedClients.length === 0) {
       container.appendChild(el('p', { text: 'No archived clients found.', class: 'empty-state' }));
@@ -659,7 +727,7 @@ const Clients = {
       panel.appendChild(header);
 
       // Accordion Content
-      const content = el('div', { class: 'accordion-content', style: 'padding: 16px; background: #fafafa;' });
+      const content = el('div', { class: 'accordion-content', style: 'padding: 16px; background: var(--color-bg-muted);' });
 
       // Client info block
       const infoBlock = el('div', { style: 'display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; font-size: 0.875rem;' }, [
@@ -674,7 +742,7 @@ const Clients = {
       const wrs = DB.getWhere('workRequests', wr => wr.clientId === c.id);
       
       // Work Requests Sub-section
-      content.appendChild(el('h4', { text: 'Cancelled Work Requests', style: 'margin: 16px 0 8px 0; border-bottom: 1px solid var(--color-border); padding-bottom: 4px; font-size: 0.9rem; color: #374151;' }));
+      content.appendChild(el('h4', { text: 'Cancelled Work Requests', style: 'margin: 16px 0 8px 0; border-bottom: 1px solid var(--color-border); padding-bottom: 4px; font-size: 0.9rem; color: var(--color-text);' }));
       if (wrs.length === 0) {
         content.appendChild(el('p', { text: 'No work requests found.', class: 'empty-state', style: 'font-size: 0.8125rem; color: var(--color-text-muted);' }));
       } else {
@@ -706,7 +774,7 @@ const Clients = {
       const docs = DB.getWhere('documents', d => wrIds.includes(d.workRequestId) && (d.status === 'Archived' || d.archived === true));
 
       // Documents Sub-section
-      content.appendChild(el('h4', { text: 'Archived Documents', style: 'margin: 16px 0 8px 0; border-bottom: 1px solid var(--color-border); padding-bottom: 4px; font-size: 0.9rem; color: #374151;' }));
+      content.appendChild(el('h4', { text: 'Archived Documents', style: 'margin: 16px 0 8px 0; border-bottom: 1px solid var(--color-border); padding-bottom: 4px; font-size: 0.9rem; color: var(--color-text);' }));
       if (docs.length === 0) {
         content.appendChild(el('p', { text: 'No archived documents found.', class: 'empty-state', style: 'font-size: 0.8125rem; color: var(--color-text-muted);' }));
       } else {

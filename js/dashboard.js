@@ -54,6 +54,11 @@ const Dashboard = {
     // 4. Upcoming Widgets (Below KPI Cards)
     bento.appendChild(this.renderUpcomingDisbursementsCard('ALL'));
     bento.appendChild(this.renderWorkRequestsDueThisWeekCard('ALL'));
+
+    const canSeeReqsConsolidated = ['Admin', 'Manager', 'Accounting', 'Documentation'].includes(Auth.user?.role);
+    if (canSeeReqsConsolidated) {
+      bento.appendChild(this.renderPendingOperationsRequestsCard('ALL'));
+    }
     
     container.appendChild(bento);
 
@@ -92,6 +97,11 @@ const Dashboard = {
     // 4. Upcoming Widgets (Below KPI Cards)
     bento.appendChild(this.renderUpcomingDisbursementsCard(Auth.activeEntity));
     bento.appendChild(this.renderWorkRequestsDueThisWeekCard(Auth.activeEntity));
+
+    const canSeeReqsScoped = ['Admin', 'Manager', 'Accounting', 'Documentation'].includes(Auth.user?.role);
+    if (canSeeReqsScoped) {
+      bento.appendChild(this.renderPendingOperationsRequestsCard(Auth.activeEntity));
+    }
 
     container.appendChild(bento);
     return container;
@@ -152,11 +162,7 @@ const Dashboard = {
       wrs.forEach(wr => {
         const item = el('div', { class: 'detail-item-v2', style: 'display: flex; justify-content: space-between; align-items: center; padding: 10px; border-radius: 8px; background: var(--color-bg); cursor: pointer;' });
         item.addEventListener('click', () => {
-          location.hash = `#operations`;
-          // We can set the active work request detail
-          Workflow.detailWrId = wr.id;
-          Workflow.view = 'detail';
-          App.handleRoute();
+          location.hash = `#operations/detail/${wr.id}`;
         });
         const left = el('div', { style: 'display: flex; flex-direction: column; gap: 2px;' });
         left.appendChild(el('span', { text: wr.title, style: 'font-weight: 600; font-size: 0.875rem;' }));
@@ -186,9 +192,9 @@ const Dashboard = {
     // If all incomplete tasks have a log today, no prompt needed.
     if (tasksNeedingLogs.length === 0) return null;
 
-    const banner = el('div', { 
-      class: 'alert-banner', 
-      style: 'background: #fffbeb; border: 1px solid #f59e0b; color: #92400e; padding: 12px 16px; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);' 
+    const banner = el('div', {
+      class: 'alert-banner',
+      style: 'background: var(--color-bg-muted); border: 1px solid var(--color-warning); color: var(--color-text); padding: 12px 16px; border-radius: 8px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);'
     });
     
     const left = el('div', { style: 'display: flex; align-items: center; gap: 12px;' });
@@ -1367,7 +1373,7 @@ const Dashboard = {
       const headerRow = el('div', { class: 'sidebar-header' });
       headerRow.appendChild(el('h3', { class: 'sidebar-title', text: `Schedule: ${formatDate(this.selectedDay)}` }));
       
-      const clearBtn = el('button', { class: 'btn btn-ghost btn-xs', text: 'Clear' });
+      const clearBtn = el('button', { class: 'btn btn-secondary btn-xs', text: 'Clear' });
       clearBtn.onclick = (e) => {
         e.stopPropagation();
         this.selectedDay = null;
@@ -1497,16 +1503,10 @@ const Dashboard = {
       viewBtn.onclick = (e) => {
         e.stopPropagation();
         if (type === 'wr') {
-          Workflow.view = 'detail';
-          Workflow.detailWrId = item.id;
-          // Note: The detail view in workflow natively shows the tasks list.
-          location.hash = '#operations';
+          location.hash = '#operations/detail/' + item.id;
         } else {
-          Disbursement.view = 'detail';
-          Disbursement.detailId = item.id;
-          location.hash = '#disbursement';
+          location.hash = '#disbursement/detail/' + item.id;
         }
-        App.handleRoute();
       };
       details.appendChild(viewBtn);
 
@@ -1527,5 +1527,83 @@ const Dashboard = {
     row.appendChild(el('span', { class: 'detail-lbl', text: label }));
     row.appendChild(el('span', { class: 'detail-val', text: value }));
     return row;
+  },
+
+  renderPendingOperationsRequestsCard(entity) {
+    const card = el('div', { class: 'bento-item bento-half', style: 'max-height: 350px; overflow-y: auto;' });
+    card.appendChild(el('h3', { text: 'Pending Operations Requests', style: 'margin-bottom: var(--spacing-md); font-size: 1.125rem; font-weight: 600;' }));
+
+    let requests = DB.getWhere('operationsRequests', r => r.status === 'pending');
+    
+    if (entity && entity !== 'ALL') {
+      requests = requests.filter(r => {
+        const wr = DB.getById('workRequests', r.workRequestId);
+        return wr && wr.entity.toUpperCase() === entity.toUpperCase();
+      });
+    }
+
+    const role = Auth.user?.role;
+    if (role === 'Accounting') {
+      requests = requests.filter(r => r.type === 'billing' || r.type === 'disbursement');
+    } else if (role === 'Documentation') {
+      requests = requests.filter(r => r.type === 'transmittal');
+    } else if (role !== 'Admin' && role !== 'Manager') {
+      requests = [];
+    }
+
+    if (requests.length === 0) {
+      card.appendChild(el('p', { class: 'empty-state', text: 'No pending operations requests.', style: 'margin: auto;' }));
+    } else {
+      const list = el('div', { style: 'display: flex; flex-direction: column; gap: var(--spacing-sm);' });
+      requests.forEach(r => {
+        const wr = DB.getById('workRequests', r.workRequestId);
+        const wrTitle = wr ? wr.title : 'Unknown Work Request';
+        const client = DB.getById('clients', r.clientId);
+        const clientName = client ? client.name : 'Unknown Client';
+        
+        const typeLabel = r.type === 'billing' ? 'Billing' : r.type === 'disbursement' ? 'Disbursement' : 'Transmittal';
+        const typeIcon = r.type === 'billing' ? '📄' : r.type === 'disbursement' ? '💸' : '📦';
+
+        const item = el('div', { class: 'detail-item-v2', style: 'display: flex; justify-content: space-between; align-items: center; padding: 10px; border-radius: 8px; background: var(--color-bg);' });
+        const left = el('div', { style: 'display: flex; flex-direction: column; gap: 2px;' });
+        left.appendChild(el('span', { text: `${typeIcon} Request for ${typeLabel}`, style: 'font-weight: 600; font-size: 0.875rem;' }));
+        left.appendChild(el('span', { text: `WR: ${wrTitle} • Client: ${clientName}`, style: 'font-size: 0.75rem; color: var(--color-text-muted);' }));
+        if (r.notes) {
+          left.appendChild(el('span', { text: `Note: "${r.notes}"`, style: 'font-size: 0.75rem; font-style: italic; color: var(--color-text-muted); margin-top: 2px;' }));
+        }
+        item.appendChild(left);
+
+        const right = el('div', { style: 'display: flex; gap: 8px; align-items: center;' });
+        const fulfillBtn = el('button', { class: 'btn btn-primary btn-xs', text: 'Fulfill' });
+        fulfillBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.fulfillOperationsRequest(r);
+        });
+        right.appendChild(fulfillBtn);
+        item.appendChild(right);
+
+        list.appendChild(item);
+      });
+      card.appendChild(list);
+    }
+
+    return card;
+  },
+
+  fulfillOperationsRequest(req) {
+    if (req.type === 'billing') {
+      Billing.prefilledWrId = req.workRequestId;
+      Billing.prefilledClientId = req.clientId;
+      Billing.prefilledRequestId = req.id;
+      location.hash = '#billing/form';
+    } else if (req.type === 'disbursement') {
+      Disbursement.prefilledWrId = req.workRequestId;
+      Disbursement.prefilledClientId = req.clientId;
+      Disbursement.prefilledRequestId = req.id;
+      location.hash = '#disbursement/form';
+    } else if (req.type === 'transmittal') {
+      Workflow.prefilledTransmittalRequestId = req.id;
+      location.hash = '#operations/detail/' + req.workRequestId;
+    }
   }
 };

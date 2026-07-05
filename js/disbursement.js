@@ -7,6 +7,8 @@ const Disbursement = {
   view: 'list', // 'list' | 'form' | 'detail' | 'report' | 'templates'
   detailId: null,
   listViewMode: 'table', // 'table' | 'board' | 'list'
+  EDITABLE_STATUSES: ['Draft', 'Submitted', 'Under Review', 'Pending'],
+  PENDING_APPROVAL_STATUSES: ['Submitted', 'Under Review', 'Pending'],
 
   render() {
     const container = el('div', { class: 'page' });
@@ -16,7 +18,7 @@ const Disbursement = {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       const h1 = el('h1', { class: 'breadcrumb-h1' });
       const baseLink = el('a', { href: 'javascript:void(0)', class: 'breadcrumb-base', text: 'Disbursement' });
-      baseLink.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
+      baseLink.addEventListener('click', () => { location.hash = '#disbursement'; });
       h1.appendChild(baseLink);
       h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
       h1.appendChild(document.createTextNode(d?.description || 'Detail'));
@@ -24,34 +26,97 @@ const Disbursement = {
       
       const actions = el('div', { class: 'title-bar-actions' });
       if (d) {
+        // Edit button — Admin and Accounting (users with disbursement:edit or create)
+        const canEdit = Auth.can('disbursement:edit') || Auth.can('disbursement:create');
+        const isPendingStatus = ['Draft', 'Submitted', 'Under Review', 'Pending'].includes(d.status);
+        if (canEdit && isPendingStatus) {
+          const editBtn = el('button', { class: 'btn btn-warning btn-sm', text: '✏️ Edit Expense', style: 'margin-right:8px;' });
+          editBtn.addEventListener('click', () => {
+            this.detailId = d.id;
+            openFormPanel({
+              icon: '💰', title: 'Edit Expense',
+              formContent: this.renderForm(), formId: 'disbursement-form',
+              viewContext: 'expense-form',
+              fullPageRoute: `#disbursement/form/${d.id}`,
+              actions: [
+                { text: 'Update Expense', class: 'btn btn-primary', type: 'submit', form: 'disbursement-form', testId: 'submit-expense-btn' },
+                { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#disbursement/detail/' + d.id), testId: 'cancel-expense-btn' }
+              ]
+            });
+          });
+          actions.appendChild(editBtn);
+        }
+
+        // Delete button — Admin only (checked via can('disbursement:delete'))
+        if (Auth.can('disbursement:delete')) {
+          const deleteBtn = el('button', { class: 'btn btn-danger btn-sm', text: '🗑️ Delete', style: 'margin-right:8px;' });
+          deleteBtn.addEventListener('click', () => {
+            Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', () => {
+              // Unlink from WR if linked
+              if (d.linkedWorkRequestId) {
+                const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+                if (wr) {
+                  const linkedIds = (wr.linkedDisbursementIds || []).filter(id => id !== d.id);
+                  DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
+                }
+              }
+              DB.remove('disbursements', d.id);
+              location.hash = '#disbursement';
+              Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
+            }, 'danger');
+          });
+          actions.appendChild(deleteBtn);
+        }
+        if (d.status === 'Draft' && Auth.can('disbursement:create')) {
+          const submitBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Submit Expense', style: 'margin-right:8px;' });
+          submitBtn.addEventListener('click', () => {
+            Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', () => {
+              DB.update('disbursements', d.id, { status: 'Submitted', submittedAt: new Date().toISOString() });
+              App.handleRoute();
+            }, 'success');
+          });
+          actions.appendChild(submitBtn);
+        }
+        const noLogoLabel = el('label', { style: 'margin-right:12px; font-size:0.8125rem; display:inline-flex; align-items:center; gap:6px; cursor:pointer; color:var(--color-text-muted);' });
+        const noLogoCheckbox = el('input', { type: 'checkbox' });
+        noLogoLabel.appendChild(noLogoCheckbox);
+        noLogoLabel.appendChild(document.createTextNode('No Logo (Generic)'));
+        actions.appendChild(noLogoLabel);
+
         const genExpBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Generate Expense PDF', style: 'margin-right:8px;' });
-        genExpBtn.addEventListener('click', () => this.generateExpensePDF(d));
+        genExpBtn.addEventListener('click', () => {
+          const noLogo = noLogoCheckbox.checked;
+          this.generateExpensePDF(d, noLogo);
+        });
         actions.appendChild(genExpBtn);
-        const genVouchBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'Generate Voucher', style: 'margin-right:8px;' });
+
+        const genVouchBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Generate Voucher', style: 'margin-right:8px;' });
         genVouchBtn.addEventListener('click', () => this.generateVoucher(d));
         actions.appendChild(genVouchBtn);
       }
-      const backBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '← Back to List' });
-      backBtn.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
+      const backBtn = el('button', { class: 'btn btn-secondary btn-sm', text: '← Back to List' });
+      backBtn.addEventListener('click', () => { location.hash = '#disbursement'; });
       actions.appendChild(backBtn);
       titleBar.appendChild(actions);
       container.appendChild(titleBar);
-    } else if (this.view === 'templates') {
+    } else if (this.view === 'form') {
+      container.classList.add('disbursement-tab-page');
+      const isNew = !this.detailId;
+      const existing = isNew ? null : DB.getById('disbursements', this.detailId);
+      container.appendChild(buildFormBreadcrumb({
+        baseLabel: 'Disbursement',
+        baseHash: '#disbursement',
+        currentText: isNew ? 'New Expense' : (existing?.description || 'Edit Expense'),
+        actions: [
+          { text: '← Back to List', class: 'btn btn-secondary btn-sm', onClick: () => { location.hash = '#disbursement'; } }
+        ]
+      }));
+    } else if (this.view === 'list' || this.view === 'templates' || this.view === 'report') {
+      container.classList.add('disbursement-tab-page');
       const titleBar = el('div', { class: 'page-title-bar-v2' });
-      const h1 = el('h1', { class: 'breadcrumb-h1' });
-      const baseLink = el('a', { href: 'javascript:void(0)', class: 'breadcrumb-base', text: 'Disbursement' });
-      baseLink.addEventListener('click', () => { this.view = 'list'; App.handleRoute(); });
-      h1.appendChild(baseLink);
-      h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
-      h1.appendChild(document.createTextNode('Templates'));
-      titleBar.appendChild(h1);
-      
-      const backBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '← Back to List' });
-      backBtn.addEventListener('click', () => { this.view = 'list'; App.handleRoute(); });
-      titleBar.appendChild(backBtn);
+      titleBar.appendChild(el('h1', { text: 'Disbursement' }));
       container.appendChild(titleBar);
-    } else {
-      container.appendChild(el('h1', { text: 'Disbursement' }));
+      container.appendChild(this.renderTabNav());
     }
 
     if (this.view === 'list') container.appendChild(this.renderList());
@@ -60,10 +125,121 @@ const Disbursement = {
     else if (this.view === 'report') container.appendChild(this.renderReport());
     else if (this.view === 'templates') container.appendChild(this.renderTemplates());
 
+    setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
   },
 
-  init() {},
+  init() {
+    this.updateStickyOffsets();
+  },
+
+  updateStickyOffsets() {
+    App.updateStickyOffsets();
+  },
+
+  renderTabNav() {
+    const tabNav = el('div', { class: 'module-tab-nav' });
+
+    const entity = Auth.activeEntity;
+    const dbCount = DB.getWhere('disbursements', d => {
+      const dEnt = (d.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(dEnt);
+      }
+      return dEnt === entity.toUpperCase();
+    }).length;
+
+    const templateCount = DB.getWhere('disbursementTemplates', t => {
+      const tEnt = (t.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(tEnt);
+      }
+      return tEnt === entity.toUpperCase();
+    }).length;
+
+    const tabs = [
+      { key: 'list', label: 'Disbursements', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: dbCount },
+      { key: 'templates', label: 'Templates', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>', count: templateCount },
+      { key: 'report', label: 'Summary Report', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>' }
+    ];
+
+    tabs.forEach(tab => {
+      const btn = el('button', { class: 'module-tab-link' + (this.view === tab.key ? ' active' : '') });
+      btn.appendChild(parseHTML(tab.icon));
+      btn.appendChild(document.createTextNode(' ' + tab.label));
+      if (tab.count !== undefined) {
+        btn.appendChild(document.createTextNode(' '));
+        btn.appendChild(el('span', { class: 'module-badge-count', text: String(tab.count) }));
+      }
+      btn.addEventListener('click', () => {
+        this.view = tab.key;
+        App.handleRoute();
+      });
+      tabNav.appendChild(btn);
+    });
+
+    const canCreate = Auth.can('disbursement:create');
+    const canRequest = Auth.can('disbursement:request');
+
+    if (canCreate && canRequest) {
+      const wrapper = el('div', { class: 'split-btn-group' });
+
+      const primaryBtn = el('button', {
+        class: 'btn btn-primary btn-sm split-btn-left'
+      });
+      primaryBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> File Expense';
+      primaryBtn.addEventListener('click', () => {
+        this.showForm();
+      });
+      wrapper.appendChild(primaryBtn);
+
+      const toggleBtn = el('button', {
+        class: 'btn btn-primary btn-sm split-btn-right'
+      });
+      toggleBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+      wrapper.appendChild(toggleBtn);
+
+      const menu = el('div', { class: 'dropdown-menu split-btn-menu hidden' });
+
+      const requestItem = el('button', { class: 'dropdown-item' });
+      requestItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> Request Disbursement';
+      requestItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.add('hidden');
+        Disbursement.showRequestDisbursementModal();
+      });
+
+      menu.appendChild(requestItem);
+      wrapper.appendChild(menu);
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.toggle('hidden');
+      });
+
+      tabNav.appendChild(wrapper);
+    } else if (canCreate) {
+      const addBtn = el('button', {
+        class: 'btn btn-primary btn-sm',
+        style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;',
+        html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> File Expense'
+      });
+      addBtn.addEventListener('click', () => {
+        this.showForm();
+      });
+      tabNav.appendChild(addBtn);
+    } else if (canRequest) {
+      const reqBtn = el('button', {
+        class: 'btn btn-primary btn-sm',
+        style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;'
+      });
+      reqBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> Request Disbursement';
+      reqBtn.addEventListener('click', () => { Disbursement.showRequestDisbursementModal(); });
+      tabNav.appendChild(reqBtn);
+    }
+
+    return tabNav;
+  },
 
   getFundSource(item) {
     if (item.fundSource) return item.fundSource;
@@ -80,6 +256,32 @@ const Disbursement = {
     return el('span', { class: 'badge badge-recurring', text: 'Recurring' });
   },
 
+  canEditDisbursement(d) {
+    return Auth.can('disbursement:create') &&
+           this.EDITABLE_STATUSES.includes(d.status);
+  },
+
+  showForm(disbId = null) {
+    this.detailId = disbId;
+    const isNew = !disbId;
+    const existing = isNew ? null : DB.getById('disbursements', disbId);
+    const fullPageRoute = isNew ? '#disbursement/form/new' : `#disbursement/form/${disbId}`;
+
+    openFormPanel({
+      icon: '💰',
+      title: isNew ? 'File Expense' : `Edit Expense — ${existing?.description || ''}`.trim(),
+      formContent: this.renderForm(),
+      formId: 'disbursement-form',
+      viewContext: 'expense-form',
+      fullPageRoute,
+      newTabRoute: fullPageRoute,
+      actions: [
+        { text: isNew ? 'Submit Expense' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'disbursement-form' },
+        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#disbursement') }
+      ]
+    });
+  },
+
   statusBadge(status) {
     const map = {
       'Draft': 'badge-warning',
@@ -87,11 +289,12 @@ const Disbursement = {
       'Under Review': 'badge-warning',
       'Pending': 'badge-warning',
       'Approved': 'badge-info',
+      'Release Pending Approval': 'badge-warning',
       'Released': 'badge-success',
       'Rejected': 'badge-danger',
       'Cancelled': 'badge-danger'
     };
-    const label = (status === 'Draft' || status === 'Submitted' || status === 'Under Review') ? 'Pending' : status;
+    const label = status;
     return el('span', { class: 'badge ' + (map[status] || ''), text: label });
   },
 
@@ -116,28 +319,42 @@ const Disbursement = {
     const entity = Auth.activeEntity;
     const viewMode = App.getPreferredViewMode('disbursement');
 
-    const actions = el('div', { class: 'actions-bar' });
-    const addBtn = el('button', { class: 'btn btn-primary', text: 'File Expense' });
-    addBtn.addEventListener('click', () => { this.view = 'form'; this.detailId = null; App.handleRoute(); });
-    actions.appendChild(addBtn);
-
-    const templatesBtn = el('button', { class: 'btn btn-ghost', text: 'Templates' });
-    templatesBtn.addEventListener('click', () => { this.view = 'templates'; App.handleRoute(); });
-    actions.appendChild(templatesBtn);
-
-    const reportBtn = el('button', { class: 'btn btn-ghost', text: 'Summary Report' });
-    reportBtn.addEventListener('click', () => { this.view = 'report'; App.handleRoute(); });
-    actions.appendChild(reportBtn);
-
     const wrapper = el('div');
-    wrapper.appendChild(actions);
+    const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
+    const filters = el('div', { class: 'filters-bar' });
+
+
+
+    // Pending operations requests banner
+    if (Auth.can('disbursement:create')) {
+      const pendingReqs = DB.getWhere('operationsRequests', r => r.status === 'pending' && r.type === 'disbursement');
+      if (pendingReqs.length > 0) {
+        const banner = el('div', { class: 'pending-requests-banner', style: 'background:var(--color-bg-muted);border:1px solid var(--color-warning);border-radius:var(--radius-md);padding:var(--spacing-md);margin-bottom:var(--spacing-md);' });
+        const bannerTitle = el('div', { style: 'font-weight:600;color:var(--color-text);margin-bottom:var(--spacing-sm);font-size:0.95rem;' });
+        bannerTitle.textContent = `⚠ ${pendingReqs.length} Pending Disbursement Request${pendingReqs.length > 1 ? 's' : ''} from Operations`;
+        banner.appendChild(bannerTitle);
+        pendingReqs.forEach(req => {
+          const row = el('div', { style: 'display:flex;align-items:center;justify-content:space-between;padding:var(--spacing-xs) 0;border-bottom:1px solid var(--color-border);' });
+          const client = DB.getById('clients', req.clientId);
+          const wr = DB.getById('workRequests', req.workRequestId);
+          const info = el('span', { style: 'font-size:0.875rem;color:var(--color-text);' });
+          info.textContent = `${client ? client.name : 'Unknown Client'} – ${wr ? wr.title : 'Unknown WR'} (requested by ${req.requestedBy || 'N/A'})`;
+          row.appendChild(info);
+          const fulfillBtn = el('button', { class: 'btn btn-primary', text: 'Fulfill', style: 'padding:2px 12px;font-size:0.8rem;' });
+          fulfillBtn.addEventListener('click', () => { Disbursement.prefilledWrId = req.workRequestId; Disbursement.prefilledClientId = req.clientId; Disbursement.prefilledRequestId = req.id; location.hash = '#disbursement/form'; });
+          row.appendChild(fulfillBtn);
+          banner.appendChild(row);
+        });
+        wrapper.appendChild(banner);
+      }
+    }
 
     // "Pending for Release" Section for Handlers
     const pendingForRelease = DB.getWhere('disbursements', d => d.entity === entity && d.status === 'Approved' && d.paymentHandledBy === Auth.user.id);
     if (pendingForRelease.length > 0) {
-      const pfrSection = el('div', { class: 'form-section', style: 'background: #fff7ed; border: 1px solid #ffedd5; padding: var(--spacing-md); border-radius: 12px; margin-bottom: var(--spacing-lg);' });
-      pfrSection.appendChild(el('h3', { text: '⚠️ Pending for Release', style: 'color: #c2410c; margin-top: 0;' }));
-      pfrSection.appendChild(el('p', { text: 'The following disbursements have been approved by Admin and are waiting for your final authorization and fund release.', style: 'font-size: 0.875rem; color: #9a3412; margin-bottom: var(--spacing-md);' }));
+      const pfrSection = el('div', { class: 'form-section', style: 'background: var(--color-bg-muted); border: 1px solid var(--color-warning); padding: var(--spacing-md); border-radius: 12px; margin-bottom: var(--spacing-lg);' });
+      pfrSection.appendChild(el('h3', { text: '⚠️ Pending for Release', style: 'color: var(--color-warning); margin-top: 0;' }));
+      pfrSection.appendChild(el('p', { text: 'The following disbursements have been approved by Admin and are waiting for your final authorization and fund release.', style: 'font-size: 0.875rem; color: var(--color-text-muted); margin-bottom: var(--spacing-md);' }));
       
       const pfrTable = el('table', { class: 'task-table-v2' });
       pfrTable.appendChild(el('thead', {}, [
@@ -157,7 +374,7 @@ const Disbursement = {
         tr.appendChild(el('td', { text: req?.name || '—' }));
         const tdAct = el('td', { class: 'text-right' });
         const authBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Authorize Release' });
-        authBtn.addEventListener('click', () => { this.detailId = d.id; this.view = 'detail'; App.handleRoute(); });
+        authBtn.addEventListener('click', () => { location.hash = '#disbursement/detail/' + d.id; });
         tdAct.appendChild(authBtn);
         tr.appendChild(tdAct);
         pfrBody.appendChild(tr);
@@ -167,53 +384,110 @@ const Disbursement = {
       wrapper.appendChild(pfrSection);
     }
 
-    // Filters bar
-    const filtersBar = el('div', { class: 'filters-bar' });
+    // "Release Pending Admin Approval" Section — visible to Admin
+    if (Auth.can('disbursement:approve')) {
+      const releasePending = DB.getWhere('disbursements', d => d.entity === entity && d.status === 'Release Pending Approval');
+      if (releasePending.length > 0) {
+        const rpSection = el('div', { class: 'form-section', style: 'background: #fdf4ff; border: 1px solid #f0abfc; padding: var(--spacing-md); border-radius: 12px; margin-bottom: var(--spacing-lg);' });
+        rpSection.appendChild(el('h3', { text: '📋 Release Requests Pending Approval', style: 'color: #86198f; margin-top: 0;' }));
+        rpSection.appendChild(el('p', { text: 'A Manager has marked the following disbursements for release. Please review and approve or reject.', style: 'font-size: 0.875rem; color: #a21caf; margin-bottom: var(--spacing-md);' }));
+
+        const rpTable = el('table', { class: 'task-table-v2' });
+        rpTable.appendChild(el('thead', {}, [
+          el('tr', {}, [
+            el('th', { text: 'Category' }),
+            el('th', { text: 'Amount' }),
+            el('th', { text: 'Requested By' }),
+            el('th', { text: 'Marked By' }),
+            el('th', { text: 'Actions', class: 'text-right' })
+          ])
+        ]));
+        const rpBody = el('tbody');
+        releasePending.forEach(d => {
+          const tr = el('tr');
+          tr.appendChild(el('td', { text: d.category, style: 'font-weight:600;' }));
+          tr.appendChild(el('td', { text: formatPHP(d.amount) }));
+          const req = DB.getById('users', d.requestedBy);
+          tr.appendChild(el('td', { text: req?.name || '—' }));
+          const marker = d.releaseRequestedBy ? DB.getById('users', d.releaseRequestedBy) : null;
+          tr.appendChild(el('td', { text: marker?.name || '—' }));
+          const tdAct = el('td', { class: 'text-right' });
+          const reviewBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Review & Approve' });
+          reviewBtn.addEventListener('click', () => { location.hash = '#disbursement/detail/' + d.id; });
+          tdAct.appendChild(reviewBtn);
+          tr.appendChild(tdAct);
+          rpBody.appendChild(tr);
+        });
+        rpTable.appendChild(rpBody);
+        rpSection.appendChild(rpTable);
+        wrapper.appendChild(rpSection);
+      }
+    }
 
     const wrFilter = el('select', { class: 'form-select', style: 'max-width:180px' });
     wrFilter.appendChild(el('option', { value: '', text: 'All Work Requests' }));
-    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
+    DB.getWhere('workRequests', wr => {
+      const wrEnt = (wr.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
+      }
+      return wrEnt === entity.toUpperCase();
+    }).filter(wr => {
+      return Auth.canViewWr(wr);
+    }).forEach(wr => {
       const client = DB.getById('clients', wr.clientId);
       wrFilter.appendChild(el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') }));
     });
-    filtersBar.appendChild(wrFilter);
+    filters.appendChild(wrapFilterFieldWithClear(wrFilter));
 
-    const clientFilter = el('select', { class: 'form-select', style: 'max-width:180px' });
-    clientFilter.appendChild(el('option', { value: '', text: 'All Clients' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
-      clientFilter.appendChild(el('option', { value: c.id, text: c.name }));
+    const clientOptions = [{ value: '', text: 'All Clients' }];
+    DB.getWhere('clients', c => {
+      const clientEnt = (c.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt);
+      }
+      return clientEnt === entity.toUpperCase();
+    }).forEach(c => {
+      clientOptions.push({ value: c.id, text: c.name });
     });
-    filtersBar.appendChild(clientFilter);
+    const clientFilter = createSearchableDropdown({ placeholder: 'All Clients', options: clientOptions, maxWidth: '180px' });
+    filters.appendChild(clientFilter);
 
-    const empFilter = el('select', { class: 'form-select', style: 'max-width:180px' });
-    empFilter.appendChild(el('option', { value: '', text: 'All Employees' }));
-    DB.getWhere('users', u => ['Admin', 'Manager', 'Staff'].includes(u.role)).forEach(u => {
-      empFilter.appendChild(el('option', { value: u.id, text: u.name }));
+    const empOptions = [{ value: '', text: 'All Employees' }];
+    DB.getWhere('users', u => Auth.ALL_ROLES.includes(u.role)).forEach(u => {
+      empOptions.push({ value: u.id, text: u.name });
     });
-    filtersBar.appendChild(empFilter);
+    (DB.getAll('tasks') || []).forEach(t => {
+      const name = (t.assigneeName || '').trim();
+      if (name && !empOptions.some(opt => opt.value === name || opt.text === name)) {
+        empOptions.push({ value: name, text: name });
+      }
+    });
+    const empFilter = createSearchableDropdown({ placeholder: 'All Employees', options: empOptions, maxWidth: '180px' });
+    filters.appendChild(empFilter);
 
     const fundFilter = el('select', { class: 'form-select', style: 'max-width:150px' });
     fundFilter.appendChild(el('option', { value: '', text: 'All Funds' }));
     ['Firm Fund', 'Client Fund'].forEach(f => fundFilter.appendChild(el('option', { value: f, text: f })));
-    filtersBar.appendChild(fundFilter);
+    filters.appendChild(wrapFilterFieldWithClear(fundFilter));
 
     const statusFilter = el('select', { class: 'form-select', style: 'max-width:150px' });
     statusFilter.appendChild(el('option', { value: '', text: 'All Statuses' }));
-    ['Pending', 'Approved', 'Released', 'Rejected'].forEach(s => {
+    ['Draft', 'Pending', 'Approved', 'Release Pending Approval', 'Released', 'Rejected'].forEach(s => {
       statusFilter.appendChild(el('option', { value: s, text: s }));
     });
-    filtersBar.appendChild(statusFilter);
+    filters.appendChild(wrapFilterFieldWithClear(statusFilter));
 
-    const dateFrom = el('input', { type: 'date', class: 'form-select', style: 'max-width:140px' });
-    const dateTo = el('input', { type: 'date', class: 'form-select', style: 'max-width:140px' });
-    filtersBar.appendChild(el('span', { text: 'From:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
-    filtersBar.appendChild(dateFrom);
-    filtersBar.appendChild(el('span', { text: 'To:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
-    filtersBar.appendChild(dateTo);
+    const dateFrom = el('input', { type: 'date', class: 'form-select' });
+    const dateTo = el('input', { type: 'date', class: 'form-select' });
+    filters.appendChild(el('span', { text: 'From:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+    filters.appendChild(wrapFilterFieldWithClear(dateFrom));
+    filters.appendChild(el('span', { text: 'To:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+    filters.appendChild(wrapFilterFieldWithClear(dateTo));
 
     const clearBtn = el('button', {
-      class: 'btn btn-ghost btn-sm',
-      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: middle;"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>Clear'
+      class: 'btn btn-secondary btn-sm',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: middle;"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-3.5"></path></svg>Clear'
     });
     clearBtn.addEventListener('click', () => {
       wrFilter.value = '';
@@ -223,54 +497,107 @@ const Disbursement = {
       statusFilter.value = '';
       dateFrom.value = '';
       dateTo.value = '';
+      App.clearSavedFilters('disbursement');
       refresh();
     });
-    filtersBar.appendChild(clearBtn);
+    filters.appendChild(clearBtn);
 
-    wrapper.appendChild(filtersBar);
+    // Restore saved filters
+    const savedFilters = App.restoreFilters('disbursement');
+    if (savedFilters) {
+      if (savedFilters.workRequest) wrFilter.value = savedFilters.workRequest;
+      if (savedFilters.client) clientFilter.value = savedFilters.client;
+      if (savedFilters.employee) empFilter.value = savedFilters.employee;
+      if (savedFilters.fund) fundFilter.value = savedFilters.fund;
+      if (savedFilters.status) statusFilter.value = savedFilters.status;
+      if (savedFilters.dateFrom) dateFrom.value = savedFilters.dateFrom;
+      if (savedFilters.dateTo) dateTo.value = savedFilters.dateTo;
+    }
+
+    const saveCurrentFilters = () => {
+      App.saveFilters('disbursement', {
+        workRequest: wrFilter.value,
+        client: clientFilter.value,
+        employee: empFilter.value,
+        fund: fundFilter.value,
+        status: statusFilter.value,
+        dateFrom: dateFrom.value,
+        dateTo: dateTo.value
+      });
+    };
 
     // View mode toggle
-    const viewToggle = el('div', { class: 'view-mode-toggle', style: 'margin-bottom: var(--spacing-md);' });
+    const vmToggle = el('div', { class: 'view-mode-toggle' });
     const viewIcons = { 'Table': ViewIcons.table, 'Board': ViewIcons.board, 'List': ViewIcons.list };
     [['Table', 'table'], ['Board', 'board'], ['List', 'list']].forEach(([label, mode]) => {
       const btn = el('button', { html: (viewIcons[label] || '') + ' ' + label, class: viewMode === mode ? 'active' : '' });
       btn.addEventListener('click', () => {
+        saveCurrentFilters();
         App.setPreferredViewMode('disbursement', mode);
         App.handleRoute();
       });
-      viewToggle.appendChild(btn);
+      vmToggle.appendChild(btn);
     });
-    wrapper.appendChild(viewToggle);
+
+    stickyContainer.appendChild(filters);
+    stickyContainer.appendChild(vmToggle);
+    wrapper.appendChild(stickyContainer);
 
     const listContainer = el('div');
     wrapper.appendChild(listContainer);
 
-    const refresh = () => this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, fundFilter.value, statusFilter.value, dateFrom.value, dateTo.value, viewMode);
-    [wrFilter, clientFilter, empFilter, fundFilter, statusFilter, dateFrom, dateTo].forEach(f => f.addEventListener('change', refresh));
+    const refresh = () => this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, fundFilter.value, statusFilter.value, dateFrom.value, dateTo.value, viewMode, empFilter.searchText, clientFilter.searchText);
+    [wrFilter, clientFilter, empFilter, fundFilter, statusFilter, dateFrom, dateTo].forEach(f => f.addEventListener('change', () => { saveCurrentFilters(); refresh(); }));
+    [empFilter, clientFilter].forEach(el => el.addEventListener('input', () => { saveCurrentFilters(); refresh(); }));
 
     refresh();
 
     return wrapper;
   },
 
-  refreshList(container, wrFilter, clientFilter, empFilter, fundFilter, statusFilter, dateFrom, dateTo, viewMode) {
+  refreshList(container, wrFilter, clientFilter, empFilter, fundFilter, statusFilter, dateFrom, dateTo, viewMode, empSearchText, clientSearchText) {
     while (container.firstChild) container.removeChild(container.firstChild);
     const entity = Auth.activeEntity;
     let items = DB.getWhere('disbursements', d => (entity === 'ALL' ? Auth.user.entities.includes(d.entity) : d.entity === entity));
 
+    items = items.filter(d => Auth.canViewDisbursement(d));
+
     if (wrFilter) items = items.filter(d => d.linkedWorkRequestId === wrFilter);
-    if (clientFilter) {
-      items = items.filter(d => {
-        if (!d.linkedWorkRequestId) return false;
-        const wr = DB.getById('workRequests', d.linkedWorkRequestId);
-        return wr && wr.clientId === clientFilter;
-      });
+    if (clientFilter || (clientSearchText && clientSearchText.trim() !== '')) {
+      const selectedClient = clientFilter ? DB.getById('clients', clientFilter) : null;
+      if (selectedClient && selectedClient.name === clientSearchText) {
+        items = items.filter(d => {
+          if (!d.linkedWorkRequestId) return false;
+          const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+          return wr && wr.clientId === clientFilter;
+        });
+      } else if (clientSearchText && clientSearchText.trim() !== '') {
+        const query = clientSearchText.trim().toLowerCase();
+        items = items.filter(d => {
+          if (!d.linkedWorkRequestId) return false;
+          const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+          if (!wr) return false;
+          const client = DB.getById('clients', wr.clientId);
+          return client && client.name.toLowerCase().includes(query);
+        });
+      }
     }
-    if (empFilter) items = items.filter(d => this.getEmployeeId(d) === empFilter);
+    if (empSearchText && empSearchText.trim() !== '') {
+      const query = empSearchText.trim().toLowerCase();
+      items = items.filter(d => {
+        const empId = d.employeeId || d.requestedBy;
+        const u = empId ? DB.getById('users', empId) : null;
+        return u && u.name.toLowerCase().includes(query);
+      });
+    } else if (empFilter) {
+      items = items.filter(d => this.getEmployeeId(d) === empFilter);
+    }
     if (fundFilter) items = items.filter(d => this.getFundSource(d) === fundFilter);
     if (statusFilter) {
-      if (statusFilter === 'Pending') {
-        items = items.filter(d => ['Draft', 'Submitted', 'Under Review', 'Pending'].includes(d.status));
+      if (statusFilter === 'Draft') {
+        items = items.filter(d => d.status === 'Draft');
+      } else if (statusFilter === 'Pending') {
+        items = items.filter(d => this.PENDING_APPROVAL_STATUSES.includes(d.status));
       } else {
         items = items.filter(d => d.status === statusFilter);
       }
@@ -343,15 +670,19 @@ const Disbursement = {
       const tdFund = el('td');
       tdFund.appendChild(fundBadge);
       tr.appendChild(tdFund);
-      const displayStatus = (['Draft', 'Submitted', 'Under Review'].includes(d.status)) ? 'Pending' : d.status;
-      tr.appendChild(el('td', { text: displayStatus }));
+      tr.appendChild(el('td', { text: d.status }));
       const payMethod = (d.status === 'Released' && d.paymentDetails?.method) ? d.paymentDetails.method : '—';
       tr.appendChild(el('td', { text: payMethod }));
       tr.appendChild(el('td', { text: formatDate(d.submittedAt) }));
       const tdAct = el('td');
-      const viewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'View' });
-      viewBtn.addEventListener('click', () => { this.view = 'detail'; this.detailId = d.id; App.handleRoute(); });
+      const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
+      viewBtn.addEventListener('click', () => { location.hash = '#disbursement/detail/' + d.id; });
       tdAct.appendChild(viewBtn);
+      if (this.canEditDisbursement(d)) {
+        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit', style: 'margin-left:4px;' });
+        editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(d.id); });
+        tdAct.appendChild(editBtn);
+      }
       tr.appendChild(tdAct);
       tbody.appendChild(tr);
     });
@@ -361,89 +692,240 @@ const Disbursement = {
 
   renderBoardView(container, items) {
     if (items.length === 0) {
-      container.appendChild(el('p', { text: 'No expenses found.', class: 'empty-state' }));
+      container.appendChild(renderEmptyStateV2({
+        variant: 'zero-state',
+        icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+        title: 'No expenses found',
+        body: 'Create an expense to start tracking disbursements.'
+      }));
       return;
     }
-    const board = el('div', { class: 'board-v2' });
-    const isAdmin = Auth.user.role === 'Admin';
-    const statuses = isAdmin ? ['Approved', 'Released', 'Rejected'] : ['Pending', 'Approved', 'Released', 'Rejected'];
+
+    const canEdit = Auth.can('disbursement:edit');
+    const canCreate = Auth.can('disbursement:create');
+    const canDelete = Auth.can('disbursement:delete');
+    const self = this;
+
+    const statuses = ['Draft', 'Pending', 'Approved', 'Release Pending Approval', 'Released', 'Rejected'];
     const statusColors = {
+      'Draft': '#94a3b8',
       'Pending': '#f59e0b',
       'Approved': '#3b82f6',
+      'Release Pending Approval': '#e879f9',
       'Released': '#10b981',
       'Rejected': '#ef4444'
     };
 
+    // Normalize boardOrder within each column (skip pending-change proxies).
     statuses.forEach(st => {
-      const colColor = statusColors[st] || '#cbd5e1';
-      const col = el('div', { class: 'board-column-v2' });
-      col.style.borderTop = `4px solid ${colColor}`;
-
-      const header = el('div', { class: 'board-column-header-v2' });
-      header.appendChild(el('div', { class: 'board-column-title', text: st }));
-      col.appendChild(header);
-
       let colItems = [];
-      if (st === 'Pending') {
-        colItems = items.filter(d => ['Draft', 'Submitted', 'Under Review', 'Pending'].includes(d.status));
+      if (st === 'Draft') {
+        colItems = items.filter(d => d.status === 'Draft' && !d.pendingChangeId);
+      } else if (st === 'Pending') {
+        colItems = items.filter(d => this.PENDING_APPROVAL_STATUSES.includes(d.status) && !d.pendingChangeId);
       } else {
-        colItems = items.filter(d => d.status === st);
+        colItems = items.filter(d => d.status === st && !d.pendingChangeId);
       }
+      colItems.sort((a, b) => {
+        const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
+        const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
+        if (oa !== null && ob !== null) return oa - ob;
+        if (oa !== null) return -1;
+        if (ob !== null) return 1;
+        return new Date(a.createdAt || a.submittedAt || 0) - new Date(b.createdAt || b.submittedAt || 0);
+      });
+      colItems.forEach((d, idx) => {
+        const newOrder = (idx + 1) * 1000;
+        if (d.boardOrder !== newOrder) {
+          d.boardOrder = newOrder;
+          DB.update('disbursements', d.id, { boardOrder: newOrder });
+        }
+      });
+    });
 
-      const cardContainer = el('div', { class: 'board-cards-scroll' });
+    let cardNumber = 1;
 
-      colItems.forEach(d => {
-        const emp = DB.getById('users', this.getEmployeeId(d));
-        const card = el('div', { class: 'board-card-v2' });
-        card.style.borderLeftColor = colColor;
-        card.addEventListener('click', () => { this.view = 'detail'; this.detailId = d.id; App.handleRoute(); });
+    KanbanBoard.render({
+      container,
+      items,
+      columns: statuses.map(st => {
+        const col = {
+          key: st,
+          label: st,
+          targetStatus: st,
+          color: statusColors[st] || '#cbd5e1',
+          statuses: st === 'Pending' ? this.PENDING_APPROVAL_STATUSES : [st],
+          emptyState: st === 'Draft' && canCreate ? false : { variant: 'compact', title: 'No expenses', body: '' }
+        };
+        if (st === 'Draft' && canCreate) {
+          col.addButton = { label: 'Add Expense', onClick: () => self.showForm() };
+          col.addCard = { label: 'Add Expense', onClick: () => self.showForm() };
+        }
+        return col;
+      }),
+      renderCard(d) {
+        const emp = DB.getById('users', self.getEmployeeId(d));
+        const source = self.getFundSource(d);
 
-        // Top: Status path and Date
-        const topRow = el('div', { class: 'card-v2-top' });
-        const displayStatus = (['Draft', 'Submitted', 'Under Review'].includes(d.status)) ? 'Pending' : d.status;
-        topRow.appendChild(el('span', { class: 'card-v2-category', text: `${displayStatus} >` }));
-        if (d.fromTemplate) topRow.appendChild(this.recurringBadge(d));
-        topRow.appendChild(el('span', { class: 'card-v2-date', text: formatDate(d.submittedAt) }));
-        card.appendChild(topRow);
+        const statusPriorityClass = {
+          'Draft': 'card-v2-priority-normal',
+          'Pending': 'card-v2-priority-medium',
+          'Approved': 'card-v2-priority-medium',
+          'Release Pending Approval': 'card-v2-priority-medium',
+          'Released': 'card-v2-priority-low',
+          'Rejected': 'card-v2-priority-urgent'
+        }[d.status] || 'card-v2-priority-normal';
 
-        // Title Row
-        const titleRow = el('div', { class: 'card-v2-title-row' });
-        titleRow.appendChild(el('div', { class: 'card-v2-title', text: d.category }));
-        card.appendChild(titleRow);
+        const progressMap = {
+          'Draft': 0,
+          'Pending': 25,
+          'Approved': 50,
+          'Release Pending Approval': 75,
+          'Released': 100,
+          'Rejected': 0
+        };
+        const progress = progressMap[d.status] || 0;
 
-        // Subtitle: Employee and Fund
-        const source = this.getFundSource(d);
-        card.appendChild(el('div', { text: `${emp?.name || '—'} • ${source}`, style: 'font-size:0.875rem;color:#64748b;margin-bottom:8px;' }));
-
-        // Linked WR/Task info
+        const descParts = [];
         if (d.linkedWorkRequestId) {
           const wr = DB.getById('workRequests', d.linkedWorkRequestId);
           if (wr) {
-            const wrWrap = el('div', { style: 'font-size: 0.725rem; color: #1e40af; margin-bottom: 12px; background: rgba(59,130,246,0.06); border: 1px solid rgba(59,130,246,0.15); border-radius: 4px; padding: 4px 6px; width: 100%; box-sizing: border-box; word-break: break-word;' });
-            wrWrap.appendChild(el('span', { text: '🔗 ' + wr.title, style: 'font-weight: 600;' }));
+            let linked = wr.title;
             if (d.linkedTaskId) {
               const task = DB.getById('tasks', d.linkedTaskId);
-              if (task) {
-                wrWrap.appendChild(el('span', { text: ` (Task: ${task.title})`, style: 'font-style: italic; color: #475569;' }));
-              }
-            } else {
-              wrWrap.appendChild(el('span', { text: ' (Entire WR)', style: 'font-style: italic; color: #475569;' }));
+              if (task) linked += ` (Task: ${task.title})`;
             }
-            card.appendChild(wrWrap);
+            descParts.push(linked);
           }
         }
+        if (d.fromTemplate) descParts.push('Recurring');
 
-        // Meta: Financials
-        const metaRow = el('div', { class: 'card-v2-meta' });
-        metaRow.appendChild(el('div', { class: 'card-v2-meta-text', text: formatPHP(d.amount), style: 'font-weight:700;color:#1e293b;font-size:1.125rem;' }));
-        card.appendChild(metaRow);
+        const card = buildCompactBoardCard({
+          key: 'DIS-' + cardNumber++,
+          progress,
+          statusColor: statusColors[d.status] || '#cbd5e1',
+          title: d.category,
+          description: `${emp?.name || '—'} • ${source}`,
+          detail: descParts.join(' • '),
+          date: d.submittedAt ? formatDate(d.submittedAt) : '',
+          priority: d.status,
+          priorityClass: statusPriorityClass,
+          onClick: () => { location.hash = '#disbursement/detail/' + d.id; }
+        });
 
-        cardContainer.appendChild(card);
-      });
-      col.appendChild(cardContainer);
-      board.appendChild(col);
+        const footerRight = card.querySelector('.card-v2-footer-right');
+        footerRight.appendChild(el('div', { class: 'card-v2-footer-item', text: formatPHP(d.amount), style: 'font-weight:700;color:var(--color-text);' }));
+        return card;
+      },
+      cardMenuItems(d) {
+        const menu = [{
+          label: 'View Details',
+          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+          onClick: () => { location.hash = '#disbursement/detail/' + d.id; }
+        }];
+        if (canEdit && d.status === 'Draft' && !d.pendingChangeId) {
+          menu.push({
+            label: 'Edit',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+            onClick: () => self.showForm(d.id)
+          });
+        }
+        if (canDelete && !d.pendingChangeId) {
+          menu.push({
+            label: 'Delete',
+            className: 'danger',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+            onClick: () => Workflow.showConfirm('Delete Expense', 'Are you sure you want to permanently delete this disbursement? This cannot be undone.', () => {
+              if (d.linkedWorkRequestId) {
+                const wr = DB.getById('workRequests', d.linkedWorkRequestId);
+                if (wr) {
+                  const linkedIds = (wr.linkedDisbursementIds || []).filter(id => id !== d.id);
+                  DB.update('workRequests', wr.id, { linkedDisbursementIds: linkedIds });
+                }
+              }
+              DB.remove('disbursements', d.id);
+              App.handleRoute();
+              Workflow.showMessage('Deleted', 'Disbursement has been permanently deleted.', 'success');
+            }, 'danger')
+          });
+        }
+        if (canCreate && d.status === 'Draft' && !d.pendingChangeId) {
+          menu.push({
+            label: 'Submit Expense',
+            className: 'primary',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M19 12l-4-4m4 4l-4 4"/></svg>',
+            onClick: () => Workflow.showConfirm('Submit Expense', 'Are you sure you want to submit this expense for approval?', () => {
+              DB.update('disbursements', d.id, { status: 'Submitted', submittedAt: new Date().toISOString() });
+              App.handleRoute();
+            }, 'success')
+          });
+        }
+        return menu;
+      },
+      drag: {
+        enabled: true,
+        canDrag: d => canEdit && !d.pendingChangeId,
+        canDrop: ({ item, targetStatus }) => {
+          if (item.status === targetStatus) return true;
+          const flow = ['Draft', 'Pending', 'Approved', 'Release Pending Approval', 'Released'];
+          const currentIdx = flow.indexOf(item.status);
+          const targetIdx = flow.indexOf(targetStatus);
+          if (currentIdx === -1 || targetIdx === -1) return false;
+          return targetIdx > currentIdx;
+        },
+        orderField: 'boardOrder',
+        onDrop({ item, targetStatus, newOrder, fromStatus }) {
+          if (fromStatus === targetStatus) {
+            DB.update('disbursements', item.id, { boardOrder: newOrder });
+            App.handleRoute();
+            return;
+          }
+
+          // Permission gate: Approved requires disbursement:approve
+          if (targetStatus === 'Approved' && !Auth.can('disbursement:approve')) {
+            Workflow.showMessage('Permission Denied', 'Only users with approval rights can approve disbursements.', 'danger');
+            return;
+          }
+
+          // Permission gate: Released requires mark_released or approve
+          if (targetStatus === 'Released' && !Auth.can('disbursement:mark_released') && !Auth.can('disbursement:approve')) {
+            Workflow.showMessage('Permission Denied', 'You do not have permission to release disbursements.', 'danger');
+            return;
+          }
+
+          // Block if pending admin approval
+          if (item.pendingChangeId) {
+            Workflow.showMessage('Pending Approval', 'This disbursement is pending administrative approval and cannot be moved.', 'warning');
+            return;
+          }
+
+          // Block Draft → beyond Pending if no amount
+          if (fromStatus === 'Draft' && targetStatus !== 'Pending' && (!item.amount || item.amount <= 0)) {
+            Workflow.showMessage('Incomplete Disbursement', 'Cannot advance — disbursement has no amount specified.', 'warning');
+            return;
+          }
+
+          const label = item.category + ' — ' + formatPHP(item.amount);
+          const applyMove = () => {
+            const changes = { boardOrder: newOrder, status: targetStatus, updatedAt: new Date().toISOString() };
+            DB.update('disbursements', item.id, changes);
+            App.handleRoute();
+          };
+
+          // Confirm critical transitions
+          if (['Approved', 'Released'].includes(targetStatus)) {
+            const msgs = {
+              'Approved': `Approve disbursement "${label}"?`,
+              'Released': `Mark disbursement "${label}" as Released? This confirms funds have been disbursed.`
+            };
+            Workflow.showConfirm('Confirm Status Change', msgs[targetStatus], applyMove, 'success');
+            return;
+          }
+
+          applyMove();
+        }
+      }
     });
-    container.appendChild(board);
   },
 
   renderCompactListView(container, items) {
@@ -474,9 +956,16 @@ const Disbursement = {
       }
       left.appendChild(el('div', { class: 'list-item-meta', text: (emp?.name || '—') + ' • ' + this.getFundSource(d) + ' • ' + formatDate(d.submittedAt) + wrMeta }));
       item.appendChild(left);
-      const viewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'View' });
-      viewBtn.addEventListener('click', () => { this.view = 'detail'; this.detailId = d.id; App.handleRoute(); });
-      item.appendChild(viewBtn);
+      const actionWrap = el('div', { style: 'display:flex;gap:4px;align-items:center;' });
+      const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
+      viewBtn.addEventListener('click', () => { location.hash = '#disbursement/detail/' + d.id; });
+      actionWrap.appendChild(viewBtn);
+      if (this.canEditDisbursement(d)) {
+        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit', style: 'margin-left:4px;' });
+        editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(d.id); });
+        actionWrap.appendChild(editBtn);
+      }
+      item.appendChild(actionWrap);
       list.appendChild(item);
     });
     container.appendChild(list);
@@ -486,98 +975,90 @@ const Disbursement = {
   // Expense Filing Form
   // ============================================================
   renderForm() {
-    const entity = Auth.activeEntity;
+    // Allow access if user can create new disbursements OR can edit existing ones
     const isNew = !this.detailId;
+    if (isNew && !Auth.can('disbursement:create')) {
+      this.view = 'list';
+      App.handleRoute();
+      return el('div');
+    }
+    if (!isNew && !Auth.can('disbursement:create') && !Auth.can('disbursement:edit')) {
+      this.view = 'list';
+      App.handleRoute();
+      return el('div');
+    }
+
+    const entity = Auth.activeEntity;
     const existing = this.detailId ? DB.getById('disbursements', this.detailId) : null;
+    const opReq = this.prefilledRequestId ? DB.getById('operationsRequests', this.prefilledRequestId) : null;
+    const prefill = this.prefilledWrId ? { workRequestId: this.prefilledWrId, clientId: this.prefilledClientId } : null;
 
     const container = el('div');
 
-    // Form header bar
     const headerBar = el('div', { class: 'form-header-bar' });
-    headerBar.appendChild(el('h2', { text: isNew ? 'File Expense' : 'Edit Expense' }));
     const headerActions = el('div', { class: 'form-actions-top' });
-    const cancelBtn = el('button', { type: 'button', class: 'btn btn-ghost', text: 'Cancel' });
-    cancelBtn.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
-    headerActions.appendChild(cancelBtn);
-
-    const saveBtnTop = el('button', { type: 'submit', class: 'btn btn-primary', text: isNew ? 'Submit Expense' : 'Save Changes', form: 'disbursement-form' });
+    const saveBtnTop = el('button', { type: 'submit', form: 'disbursement-form', class: 'btn btn-primary', text: isNew ? 'Submit Expense' : 'Save Changes' });
     headerActions.appendChild(saveBtnTop);
-
+    const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => closeFormPanelAndRoute('#disbursement'));
+    headerActions.appendChild(cancelBtn);
     headerBar.appendChild(headerActions);
     container.appendChild(headerBar);
 
-    const form = el('form', { class: 'form-stacked', id: 'disbursement-form' });
+    const form = el('form', { class: 'form-stacked notion-form', id: 'disbursement-form' });
 
-    const catGroup = el('div', { class: 'form-group' });
-    catGroup.appendChild(el('label', { text: 'Category *' }));
-    const catSel = el('select', { name: 'category', required: true, class: 'form-select' });
+    // ── Top property grid ──
+    const propsGrid = el('div', { class: 'notion-property-grid' });
+
+    // Category
+    const catGroup = el('div', { class: 'notion-prop' });
+    catGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg> Category' }));
+    const catSel = el('select', { name: 'category', required: true, class: 'notion-prop-select' });
     ['Transportation', 'Notary', 'Meals', 'Government Fee', 'Other'].forEach(c => {
       const opt = el('option', { value: c, text: c });
       if (existing && existing.category === c) opt.selected = true;
+      else if (!existing && opReq && opReq.category === c) opt.selected = true;
       catSel.appendChild(opt);
     });
     catGroup.appendChild(catSel);
-    form.appendChild(catGroup);
-
-    const descGroup = el('div', { class: 'form-group' });
-    descGroup.appendChild(el('label', { text: 'Description *' }));
-    descGroup.appendChild(el('input', { type: 'text', name: 'description', required: true, value: existing ? (existing.description || '') : '' }));
-    form.appendChild(descGroup);
-
-    const amtGroup = el('div', { class: 'form-group' });
-    amtGroup.appendChild(el('label', { text: 'Amount (₱) *' }));
-    amtGroup.appendChild(el('input', { type: 'number', name: 'amount', min: 0, step: 0.01, required: true, value: existing ? String(existing.amount) : '' }));
-    form.appendChild(amtGroup);
-
-    const receiptGroup = el('div', { class: 'form-group' });
-    receiptGroup.appendChild(el('label', { text: 'Receipt (optional)' }));
-    receiptGroup.appendChild(el('input', { type: 'file', name: 'receipt' }));
-    if (existing && existing.receiptFilename) {
-      receiptGroup.appendChild(el('p', { text: 'Current: ' + existing.receiptFilename, style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
-    }
-    form.appendChild(receiptGroup);
+    propsGrid.appendChild(catGroup);
 
     // Linked Work Request
-    const wrGroup = el('div', { class: 'form-group' });
-    wrGroup.appendChild(el('label', { text: 'Linked Work Request' }));
-    const wrSel = el('select', { name: 'linkedWorkRequestId', class: 'form-select' });
+    const wrGroup = el('div', { class: 'notion-prop' });
+    wrGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Work Request' }));
+    const wrSelAttrs = { name: 'linkedWorkRequestId', class: 'notion-prop-select' };
+    if (prefill) wrSelAttrs.disabled = true;
+    const wrSel = el('select', wrSelAttrs);
     wrSel.appendChild(el('option', { value: '', text: '— None —' }));
     DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
       const client = DB.getById('clients', wr.clientId);
       const opt = el('option', { value: wr.id, text: wr.title + ' — ' + (client?.name || '—') });
       if (existing && existing.linkedWorkRequestId === wr.id) opt.selected = true;
+      else if (!existing && prefill && prefill.workRequestId === wr.id) opt.selected = true;
       wrSel.appendChild(opt);
     });
     wrGroup.appendChild(wrSel);
-    form.appendChild(wrGroup);
+    if (prefill && prefill.workRequestId) wrGroup.appendChild(el('input', { type: 'hidden', name: 'linkedWorkRequestId', value: prefill.workRequestId }));
+    propsGrid.appendChild(wrGroup);
 
     // Task link (Dynamic based on WR)
-    const taskGroup = el('div', { class: 'form-group' });
-    taskGroup.appendChild(el('label', { text: 'Link to Specific Task' }));
-    const taskSel = el('select', { name: 'linkedTaskId', class: 'form-select' });
+    const taskGroup = el('div', { class: 'notion-prop' });
+    taskGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg> Task' }));
+    const taskSel = el('select', { name: 'linkedTaskId', class: 'notion-prop-select' });
     taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
     taskGroup.appendChild(taskSel);
-    form.appendChild(taskGroup);
+    propsGrid.appendChild(taskGroup);
 
-    const updateTasks = () => {
-      while (taskSel.firstChild) taskSel.removeChild(taskSel.firstChild);
-      taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
-      const wrId = wrSel.value;
-      if (wrId) {
-        DB.getWhere('tasks', t => t.workRequestId === wrId).forEach(t => {
-          const opt = el('option', { value: t.id, text: t.title });
-          if (existing && existing.linkedTaskId === t.id) opt.selected = true;
-          taskSel.appendChild(opt);
-        });
-      }
-    };
-    wrSel.addEventListener('change', updateTasks);
-    updateTasks(); // Initial load
+    // Amount
+    const amtGroup = el('div', { class: 'notion-prop' });
+    amtGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Amount (₱)' }));
+    amtGroup.appendChild(el('input', { type: 'number', name: 'amount', class: 'notion-prop-input', min: 0, step: 0.01, required: true, value: existing ? String(existing.amount) : (opReq ? String(opReq.amount) : '') }));
+    propsGrid.appendChild(amtGroup);
 
     // Fund Source
-    const fundGroup = el('div', { class: 'form-group' });
-    fundGroup.appendChild(el('label', { text: 'Fund Source *' }));
-    const fundWrap = el('div', { class: 'radio-group' });
+    const fundGroup = el('div', { class: 'notion-prop' });
+    fundGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg> Fund Source' }));
+    const fundWrap = el('div', { class: 'radio-group notion-radio-group' });
     ['Firm Fund', 'Client Fund'].forEach(f => {
       const label = el('label', { class: 'radio-label' });
       const radio = el('input', { type: 'radio', name: 'fundSource', value: f, required: true });
@@ -587,12 +1068,49 @@ const Disbursement = {
       fundWrap.appendChild(label);
     });
     fundGroup.appendChild(fundWrap);
-    form.appendChild(fundGroup);
+    propsGrid.appendChild(fundGroup);
 
-    // Linked invoice (only for Client Fund)
-    const invGroup = el('div', { class: 'form-group hidden', id: 'linked-invoice-group' });
-    invGroup.appendChild(el('label', { text: 'Linked Billing Invoice' }));
-    const invSel = el('select', { name: 'linkedInvoiceId', class: 'form-select' });
+    form.appendChild(propsGrid);
+
+    // Description free-form
+    const descSection = el('div', { class: 'notion-freeform' });
+    descSection.appendChild(el('label', { class: 'notion-section-label', text: 'Description' }));
+    const descInput = el('input', { type: 'text', name: 'description', class: 'notion-freeform-input', placeholder: 'What is this expense for?', required: true, value: existing ? (existing.description || '') : (opReq ? (opReq.notes || 'Operations Disbursement Request') : '') });
+    descSection.appendChild(descInput);
+    form.appendChild(descSection);
+
+    // Receipt upload
+    const receiptGroup = el('div', { class: 'notion-freeform' });
+    receiptGroup.appendChild(el('label', { class: 'notion-section-label', text: 'Receipt' }));
+    receiptGroup.appendChild(el('input', { type: 'file', name: 'receipt', class: 'notion-file-input' }));
+    if (existing && existing.receiptFilename) {
+      receiptGroup.appendChild(el('p', { text: 'Current: ' + existing.receiptFilename, style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+    } else if (!existing && opReq && opReq.receiptFilename) {
+      receiptGroup.appendChild(el('p', { text: 'Requested receipt: ' + opReq.receiptFilename, style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+    }
+    form.appendChild(receiptGroup);
+
+    const updateTasks = () => {
+      while (taskSel.firstChild) taskSel.removeChild(taskSel.firstChild);
+      taskSel.appendChild(el('option', { value: '', text: '— Whole Project —' }));
+      const wrId = wrSel.value;
+      if (wrId) {
+        DB.getWhere('tasks', t => t.workRequestId === wrId).forEach(t => {
+          const opt = el('option', { value: t.id, text: t.title });
+          if (existing && existing.linkedTaskId === t.id) opt.selected = true;
+          else if (!existing && opReq && opReq.linkedTaskId === t.id) opt.selected = true;
+          taskSel.appendChild(opt);
+        });
+      }
+    };
+    wrSel.addEventListener('change', updateTasks);
+    updateTasks(); // Initial load
+
+    // Linked invoice (only for Client Fund) — collapsible notion section
+    const invGroup = el('div', { class: 'notion-collapsible hidden', id: 'linked-invoice-group' });
+    const invToggle = el('div', { class: 'notion-toggle-header', text: 'Linked Billing Invoice' });
+    const invBody = el('div', { class: 'notion-toggle-body' });
+    const invSel = el('select', { name: 'linkedInvoiceId', class: 'notion-prop-select' });
     invSel.appendChild(el('option', { value: '', text: '— Select Invoice —' }));
     DB.getWhere('invoices', inv => inv.entity === entity && inv.status !== 'Cancelled').forEach(inv => {
       const client = DB.getById('clients', inv.clientId);
@@ -600,8 +1118,15 @@ const Disbursement = {
       if (existing && existing.linkedInvoiceId === inv.id) opt.selected = true;
       invSel.appendChild(opt);
     });
-    invGroup.appendChild(invSel);
+    invBody.appendChild(invSel);
+    invGroup.appendChild(invToggle);
+    invGroup.appendChild(invBody);
     form.appendChild(invGroup);
+
+    invToggle.addEventListener('click', () => {
+      invGroup.classList.toggle('open');
+      invToggle.classList.toggle('collapsed');
+    });
 
     form.querySelectorAll('input[name="fundSource"]').forEach(r => {
       r.addEventListener('change', () => {
@@ -609,7 +1134,6 @@ const Disbursement = {
         invGroup.classList.toggle('hidden', !isClient);
       });
     });
-    // Trigger initial state
     const initialClientFund = existing && existing.fundSource === 'Client Fund';
     if (initialClientFund) invGroup.classList.remove('hidden');
 
@@ -628,6 +1152,20 @@ const Disbursement = {
     const receiptFile = receiptInput?.files?.[0];
     const isNew = !this.detailId;
 
+    const amount = parseFloat(data.amount) || 0;
+    if (amount <= 0) {
+      Workflow.showMessage('Validation Error', 'Please enter a disbursement amount greater than zero.', 'warning');
+      return;
+    }
+
+    // On create, a receipt must be attached (or already provided via a fulfilled operations request).
+    const hasExistingReceipt = !isNew && (DB.getById('disbursements', this.detailId)?.receiptFilename || null);
+    const hasPrefilledReceipt = isNew && (this.prefilledRequestId ? DB.getById('operationsRequests', this.prefilledRequestId)?.receiptFilename : null);
+    if (isNew && !receiptFile && !hasPrefilledReceipt) {
+      Workflow.showMessage('Validation Error', 'Please attach a receipt for this disbursement.', 'warning');
+      return;
+    }
+
     const record = {
       category: data.category,
       description: data.description.trim(),
@@ -639,7 +1177,7 @@ const Disbursement = {
       entity: entity,
       employeeId: Auth.user.id,
       requestedBy: Auth.user.id,
-      status: isNew ? 'Submitted' : (DB.getById('disbursements', this.detailId)?.status || 'Submitted'),
+      status: isNew ? 'Draft' : (DB.getById('disbursements', this.detailId)?.status || 'Draft'),
       submittedAt: new Date().toISOString(),
       receiptFilename: receiptFile ? receiptFile.name : (isNew ? null : (DB.getById('disbursements', this.detailId)?.receiptFilename || null))
     };
@@ -655,7 +1193,7 @@ const Disbursement = {
         record.paymentDetails = old.paymentDetails || { method: '', reference: '', bank: '', date: '', processedBy: '' };
       }
     } else {
-      record.id = generateId('d');
+      record.id = generateSequentialId('dis', 'disbursements');
       record.createdAt = new Date().toISOString();
     }
 
@@ -685,9 +1223,87 @@ const Disbursement = {
       DB.update('disbursements', record.id, record);
     }
 
-    this.view = 'list';
-    this.detailId = null;
-    App.handleRoute();
+    // Fulfill pending operations request if any
+    const reqId = this.prefilledRequestId || (record.linkedWorkRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === record.linkedWorkRequestId && r.type === 'disbursement' && r.status === 'pending')[0]?.id : null);
+    if (reqId) {
+      DB.update('operationsRequests', reqId, {
+        status: 'fulfilled',
+        fulfilledBy: Auth.user.id,
+        fulfilledAt: new Date().toISOString(),
+        linkedRecordId: record.id
+      });
+    }
+    this.prefilledRequestId = null;
+    this.prefilledWrId = null;
+    this.prefilledClientId = null;
+
+    const msgConfig = {
+      title: isNew ? 'Expense Submitted' : 'Expense Updated',
+      message: 'Disbursement expense has been ' + (isNew ? 'submitted' : 'updated') + ' successfully.',
+      type: 'success'
+    };
+    closeFormPanelAndRoute('#disbursement', msgConfig);
+  },
+
+  showRequestDisbursementModal() {
+    const entity = Auth.activeEntity;
+    let wrs = DB.getWhere('workRequests', wr => {
+      const wrEnt = (wr.entity || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
+      return wrEnt === entity.toUpperCase();
+    });
+
+    wrs = wrs.filter(wr => Auth.canViewWr(wr));
+
+    const wrapper = el('div', { class: 'form-stacked', style: 'display: flex; flex-direction: column;' });
+    const selectGroup = el('div', { class: 'form-group' });
+    selectGroup.appendChild(el('label', { text: 'Select Work Request *' }));
+    const wrSelect = el('select', { class: 'form-select', style: 'width:100%;' });
+    wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
+    wrs.forEach(wr => {
+      const client = DB.getById('clients', wr.clientId);
+      const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'disbursement' && r.status === 'pending');
+      if (pending.length === 0) {
+        wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${client?.name || '—'}` }));
+      }
+    });
+    selectGroup.appendChild(wrSelect);
+    wrapper.appendChild(selectGroup);
+
+    const notesGroup = el('div', { class: 'form-group' });
+    notesGroup.appendChild(el('label', { text: 'Additional Notes (Optional)' }));
+    notesGroup.appendChild(el('textarea', { id: 'disb-opreq-notes', class: 'form-control', style: 'width: 100%; min-height: 80px;', placeholder: 'Provide any details for Accounting staff...' }));
+    wrapper.appendChild(notesGroup);
+
+    wrapper.appendChild(el('div', { style: 'display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;' }, [
+      el('button', { id: 'btn-cancel-disb-opreq', class: 'btn btn-ghost', text: 'Cancel' }),
+      el('button', { id: 'btn-save-disb-opreq', class: 'btn btn-primary', text: 'Submit Request' })
+    ]));
+
+    const overlay = Workflow.showModal('Request Disbursement', wrapper);
+
+    overlay.querySelector('#btn-cancel-disb-opreq').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#btn-save-disb-opreq').addEventListener('click', () => {
+      const wrId = wrSelect.value;
+      if (!wrId) { alert('Please select a work request.'); return; }
+      const wr = DB.getById('workRequests', wrId);
+      const notes = overlay.querySelector('#disb-opreq-notes').value.trim();
+      const record = {
+        id: generateId('opreq'),
+        type: 'disbursement',
+        workRequestId: wrId,
+        clientId: wr.clientId,
+        requestedBy: Auth.user.id,
+        requestedAt: new Date().toISOString(),
+        status: 'pending',
+        rejectionReason: '',
+        notes
+      };
+      DB.insert('operationsRequests', record);
+      overlay.remove();
+      Workflow.showMessage('Request Submitted', 'Your disbursement request has been submitted to Accounting for review.', 'success');
+      App.handleRoute();
+    });
   },
 
   // ============================================================
@@ -695,7 +1311,12 @@ const Disbursement = {
   // ============================================================
   renderDetail() {
     const d = DB.getById('disbursements', this.detailId);
-    if (!d) { this.view = 'list'; App.handleRoute(); return el('div'); }
+    if (!d) { location.hash = '#disbursement'; return el('div'); }
+
+    if (!Auth.canViewDisbursement(d)) {
+      location.hash = '#disbursement';
+      return el('div');
+    }
     const emp = DB.getById('users', this.getEmployeeId(d));
     const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
     const client = wr ? DB.getById('clients', wr.clientId) : null;
@@ -737,9 +1358,7 @@ const Disbursement = {
           style: 'color:#2563eb;font-weight:500;text-decoration:none;'
         });
         wrLink.addEventListener('click', () => {
-          Workflow.view = 'detail';
-          Workflow.detailWrId = linkedWr.id;
-          location.hash = '#workflow';
+          location.hash = '#operations/detail/' + linkedWr.id;
         });
         wrLink.addEventListener('mouseenter', () => { wrLink.style.textDecoration = 'underline'; });
         wrLink.addEventListener('mouseleave', () => { wrLink.style.textDecoration = 'none'; });
@@ -842,10 +1461,10 @@ const Disbursement = {
     }
 
     // Approval Actions
-    const isAdmin = Auth.user.role === 'Admin';
-    const isPending = ['Draft', 'Submitted', 'Under Review', 'Pending'].includes(d.status);
+    const canApprove = Auth.can('disbursement:approve');
+    const isPending = this.PENDING_APPROVAL_STATUSES.includes(d.status);
 
-    if (isPending && isAdmin) {
+    if (isPending && canApprove) {
       const isRequester = Auth.isSelfApprover(this.getEmployeeId(d));
       if (isRequester) {
         container.appendChild(el('p', { class: 'field-error', text: 'You cannot approve your own expense. Wait for another Admin.' }));
@@ -868,13 +1487,57 @@ const Disbursement = {
         actions.appendChild(rejectBtn);
         container.appendChild(actions);
       }
+    } else if (d.status === 'Release Pending Approval' && canApprove) {
+      // Admin approves a Manager's mark-as-released action
+      const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
+      actions.appendChild(el('p', { style: 'font-size:0.875rem;color:#64748b;margin-bottom:var(--spacing-sm);' , text: `A Manager has marked this disbursement for release. Please approve or reject.` }));
+      const approveReleaseBtn = el('button', { class: 'btn btn-success', text: 'Approve & Release Funds' });
+      approveReleaseBtn.addEventListener('click', () => {
+        this.showReleaseDialog(d.id, true);
+      });
+      actions.appendChild(approveReleaseBtn);
+
+      const rejectReleaseBtn = el('button', { class: 'btn btn-danger', text: 'Reject Release', style: 'margin-left: 8px;' });
+      rejectReleaseBtn.addEventListener('click', () => {
+        Workflow.showConfirm('Reject Release', 'Are you sure you want to reject this release request?', () => {
+          const reason = prompt('Enter rejection reason:');
+          if (reason) {
+            DB.update('disbursements', d.id, { status: 'Approved', releaseRejectionReason: reason, releaseRejectedBy: Auth.user.id, releaseRejectedAt: new Date().toISOString() });
+            Workflow.showMessage('Release Rejected', 'The release has been rejected and returned to Approved status.', 'warning');
+            App.handleRoute();
+          }
+        }, 'danger');
+      });
+      actions.appendChild(rejectReleaseBtn);
+      container.appendChild(actions);
     } else if (d.status === 'Approved') {
         const isHandler = d.paymentHandledBy === Auth.user.id;
+        const canMarkReleased = Auth.can('disbursement:mark_released');
+
         if (isHandler) {
+          // Assigned handler can authorize & release funds
           const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
           const releaseBtn = el('button', { class: 'btn btn-primary', text: 'Authorize & Release Funds' });
           releaseBtn.addEventListener('click', () => { this.showReleaseDialog(d.id); });
           actions.appendChild(releaseBtn);
+          container.appendChild(actions);
+        } else if (canMarkReleased) {
+          // Manager can mark as released (pending Admin approval)
+          const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-xl); border-top: 1px solid #e2e8f0; padding-top: var(--spacing-lg);' });
+          actions.appendChild(el('p', { style: 'font-size:0.875rem;color:#64748b;margin-bottom:var(--spacing-sm);', text: 'As a Manager, you can mark this for release. This will require Admin approval.' }));
+          const markReleaseBtn = el('button', { class: 'btn btn-warning', text: 'Mark as Released (Pending Admin Approval)' });
+          markReleaseBtn.addEventListener('click', () => {
+            Workflow.showConfirm('Mark as Released', 'This will submit a release request to Admin for final approval. Continue?', () => {
+              DB.update('disbursements', d.id, {
+                status: 'Release Pending Approval',
+                releaseRequestedBy: Auth.user.id,
+                releaseRequestedAt: new Date().toISOString()
+              });
+              Workflow.showMessage('Release Requested', 'This disbursement has been marked for release. An Admin will need to approve and finalize the release.', 'info');
+              App.handleRoute();
+            });
+          });
+          actions.appendChild(markReleaseBtn);
           container.appendChild(actions);
         } else {
           const handler = DB.getById('users', d.paymentHandledBy);
@@ -888,7 +1551,7 @@ const Disbursement = {
   showApproveDialog(id) {
     const d = DB.getById('disbursements', id);
     if (!d) return;
-    if (!['Draft', 'Submitted', 'Under Review', 'Pending'].includes(d.status)) {
+    if (!this.PENDING_APPROVAL_STATUSES.includes(d.status)) {
       Workflow.showMessage('Error', 'This disbursement is not pending approval.', 'danger');
       return;
     }
@@ -903,7 +1566,7 @@ const Disbursement = {
     handlerGroup.appendChild(el('label', { text: 'Assign Release Handler *' }));
     const handlerSel = el('select', { name: 'handlerId', required: true, class: 'form-select' });
     handlerSel.appendChild(el('option', { value: '', text: '— Select Handler —' }));
-    DB.getWhere('users', u => ['Admin', 'Manager', 'Staff'].includes(u.role) && u.id !== d.requestedBy).forEach(u => {
+    DB.getWhere('users', u => Auth.ALL_ROLES.includes(u.role) && u.id !== d.requestedBy).forEach(u => {
       handlerSel.appendChild(el('option', { value: u.id, text: u.name + ' (' + u.role + ')' }));
     });
     handlerGroup.appendChild(handlerSel);
@@ -933,14 +1596,20 @@ const Disbursement = {
     });
   },
 
-  showReleaseDialog(id) {
+  showReleaseDialog(id, adminRelease) {
     const d = DB.getById('disbursements', id);
     if (!d) return;
-    if (d.status !== 'Approved') {
+    if (adminRelease && !Auth.can('disbursement:approve')) {
+      Workflow.showMessage('Unauthorized', 'You do not have permission to approve release requests.', 'danger');
+      return;
+    }
+    // Admin release flow: status is 'Release Pending Approval' (Manager marked for release)
+    const validStatuses = adminRelease ? ['Approved', 'Release Pending Approval'] : ['Approved'];
+    if (!validStatuses.includes(d.status)) {
       Workflow.showMessage('Error', 'This disbursement is not approved for release.', 'danger');
       return;
     }
-    if (d.paymentHandledBy !== Auth.user.id) {
+    if (!adminRelease && d.paymentHandledBy !== Auth.user.id) {
       Workflow.showMessage('Unauthorized', 'You are not assigned to release this disbursement.', 'danger');
       return;
     }
@@ -1032,16 +1701,49 @@ const Disbursement = {
     return result.toUpperCase();
   },
 
-  generateExpensePDF(d) {
+  _getSanitizedViewModel(d) {
     const emp = DB.getById('users', this.getEmployeeId(d));
     const requester = DB.getById('users', d.requestedBy);
-    const approver = d.approvedBy ? DB.getById('users', d.approvedBy) : null;
+    let approverId = d.approvedBy || d.accountingApprovedBy;
+    if (!approverId && (d.status === 'Approved' || d.status === 'Released')) {
+      const adminUser = DB.getWhere('users', u => u.role === 'Admin')[0];
+      if (adminUser) approverId = adminUser.id;
+    }
+    const approver = approverId ? DB.getById('users', approverId) : null;
+    const handler = d.paymentHandledBy ? DB.getById('users', d.paymentHandledBy) : null;
+    const releaser = d.releasedBy ? DB.getById('users', d.releasedBy) : null;
     const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
-    const client = wr ? DB.getById('clients', wr.clientId) : null;
+
+    return {
+      empName: escapeHtml(emp?.name || '—'),
+      requesterEmail: escapeHtml(requester?.email || '—'),
+      requesterName: escapeHtml(requester?.name || '—'),
+      wrTitle: escapeHtml(wr?.title || '—'),
+      category: escapeHtml(d.category || '—'),
+      description: escapeHtml(d.description || '—'),
+      approverName: escapeHtml(approver?.name || '—'),
+      releaserName: escapeHtml(releaser ? releaser.name : (handler ? handler.name : '________________________')),
+      receiptFilename: escapeHtml(d.receiptFilename || '_________________'),
+      releaseFilename: escapeHtml(d.releaseFilename || '_________________'),
+      approver,
+      handler,
+      releaser,
+      wr,
+      emp
+    };
+  },
+
+  generateExpensePDF(d, noLogo = false) {
+    const safe = this._getSanitizedViewModel(d);
     const entity = d.entity || 'ATA';
     const w = window.open('', '_blank');
     if (!w) return;
     const doc = w.document;
+
+    const baseHref = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+    const base = doc.createElement('base');
+    base.href = baseHref;
+    doc.head.appendChild(base);
 
     const title = doc.createElement('title');
     title.textContent = 'Expense Report ' + d.id;
@@ -1050,95 +1752,189 @@ const Disbursement = {
     const style = doc.createElement('style');
     style.textContent = `
       @page { size: A4; margin: 15mm 20mm; }
-      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; line-height: 1.5; color: #1e293b; max-width: 210mm; margin: 0 auto; padding: 0; }
-      .doc-title { text-align: center; font-size: 16pt; font-weight: 700; letter-spacing: 4px; margin: 0 0 16px; text-transform: uppercase; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1e293b; max-width: 210mm; margin: 0 auto; padding: 0; }
+      .header-container { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 12px; }
+      .logo-box { display: flex; align-items: center; gap: 12px; max-height: 55px; }
+      .logo-img { ${entity === 'LTA' ? 'height: 42px; margin-bottom: 5px;' : 'height: 55px;'} display: block; }
+      .title-box { text-align: right; }
+      .doc-title { font-size: 18pt; font-weight: 700; letter-spacing: 4px; text-transform: uppercase; color: #0f172a; margin: 0; }
+      
       .two-col { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
-      .col { flex: 1; }
-      .col h3 { font-size: 10pt; text-transform: uppercase; color: #64748b; margin: 0 0 4px; letter-spacing: 0.5px; }
-      .col p { margin: 2px 0; font-size: 10pt; }
-      .details-bar { display: flex; gap: 32px; margin-bottom: 20px; font-size: 10pt; border: 1px solid #cbd5e1; padding: 8px 12px; border-radius: 4px; }
-      .details-bar span { flex: 1; }
-      .details-bar strong { color: #334155; }
-      table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 10pt; }
-      th { background: #f8fafc; border-bottom: 2px solid #1e293b; padding: 8px; text-align: left; font-weight: 600; text-transform: uppercase; font-size: 9pt; letter-spacing: 0.5px; }
-      td { padding: 8px; border-bottom: 1px solid #e2e8f0; }
+      .col-left { flex: 1.2; border: 1.5px solid #1e293b; padding: 12px; border-radius: 2px; background: #fff; }
+      .col-left h3 { font-size: 8.5pt; text-transform: uppercase; color: #64748b; margin: 0 0 6px 0; font-weight: 700; letter-spacing: 0.5px; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
+      .col-left p { margin: 2px 0; font-size: 10pt; }
+      
+      .col-right { flex: 0.8; display: flex; flex-direction: column; justify-content: center; font-size: 9.5pt; border: 1.5px dashed #cbd5e1; padding: 12px; border-radius: 2px; }
+      .meta-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+      .meta-row:last-child { margin-bottom: 0; }
+      .meta-label { color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 8pt; letter-spacing: 0.5px; }
+      .meta-val { font-weight: 700; color: #0f172a; }
+      
+      table { width: 100%; border-collapse: collapse; margin: 20px 0; font-size: 10pt; }
+      th { background: #f8fafc; border-top: 1.5px solid #1e293b; border-bottom: 1.5px solid #1e293b; padding: 10px 8px; text-align: left; font-weight: 700; text-transform: uppercase; font-size: 8.5pt; color: #334155; letter-spacing: 0.5px; }
+      td { padding: 10px 8px; border-bottom: 1px solid #e2e8f0; color: #0f172a; }
       .num { text-align: right; }
-      .totals { margin-top: 16px; border-top: 2px solid #1e293b; padding-top: 12px; }
-      .totals-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 10pt; }
-      .totals-row.grand { font-weight: 700; font-size: 12pt; border-top: 1px solid #cbd5e1; padding-top: 8px; margin-top: 4px; }
-      .status-badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 9pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-      .status-badge.pending { background: #fef3c7; color: #92400e; }
-      .status-badge.approved { background: #dbeafe; color: #1e40af; }
-      .status-badge.released { background: #dcfce7; color: #166534; }
-      .status-badge.rejected { background: #fee2e2; color: #991b1b; }
-      .signature-row { display: flex; justify-content: space-between; margin-top: 48px; gap: 40px; }
+      
+      .totals-container { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 16px; gap: 20px; }
+      .amount-words-box { flex: 1.2; font-size: 9pt; color: #475569; padding: 10px 0; }
+      .amount-words-box strong { color: #0f172a; text-transform: uppercase; font-size: 8pt; display: block; margin-bottom: 4px; letter-spacing: 0.5px; }
+      .amount-val-box { flex: 0.8; display: flex; justify-content: flex-end; align-items: center; font-weight: 700; font-size: 11pt; color: #0f172a; }
+      .total-label { margin-right: 12px; font-size: 8.5pt; text-transform: uppercase; color: #475569; letter-spacing: 0.5px; }
+      .total-amount-box { display: flex; border: 1.5px solid #1e293b; border-radius: 2px; }
+      .total-currency { padding: 6px 12px; background: #f1f5f9; border-right: 1.5px solid #1e293b; font-size: 10pt; }
+      .total-val { padding: 6px 18px; font-size: 11.5pt; min-width: 120px; text-align: right; font-family: monospace; }
+      
+      .bottom-layout { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 30px; gap: 24px; }
+      .payment-details-box { flex: 1.2; border: 1.5px solid #1e293b; padding: 12px; border-radius: 2px; font-size: 9pt; background: #fff; }
+      .payment-details-box h4 { margin: 0 0 8px 0; font-size: 8.5pt; text-transform: uppercase; color: #475569; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; font-weight: 700; letter-spacing: 0.5px; }
+      .payment-details-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+      .payment-details-grid .lbl { color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 7.5pt; }
+      .payment-details-grid .val { color: #0f172a; font-weight: 700; }
+      .payment-details-line { border-bottom: 1px solid #94a3b8; width: 120px; height: 14px; display: inline-block; }
+      
+      .signature-row { display: flex; justify-content: space-between; margin-top: 40px; gap: 30px; }
       .signature-box { flex: 1; text-align: center; }
-      .signature-box .line { border-top: 1px solid #1e293b; margin-top: 40px; padding-top: 4px; font-size: 9pt; }
-      .footer { margin-top: 24px; font-size: 8pt; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+      .signature-box .line { border-top: 1.5px solid #1e293b; padding-top: 6px; font-size: 9.5pt; font-weight: 700; color: #0f172a; }
+      .signature-box .line span { font-size: 8pt; color: #64748b; font-weight: 500; display: block; margin-top: 2px; }
+      
+      .footer { margin-top: 35px; font-size: 8pt; color: #64748b; text-align: center; border-top: 1.5px solid #e2e8f0; padding-top: 12px; }
+      .thank-you { font-weight: 700; font-size: 10pt; color: #334155; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
     `;
     doc.head.appendChild(style);
 
-    const statusClass = (['Draft','Submitted','Under Review','Pending'].includes(d.status)) ? 'pending'
-      : d.status === 'Approved' ? 'approved'
-      : d.status === 'Released' ? 'released'
-      : 'rejected';
-    const statusText = (['Draft','Submitted','Under Review'].includes(d.status)) ? 'PENDING' : d.status.toUpperCase();
+    const isReleased = d.status === 'Released';
+    const pd = d.paymentDetails || {};
+
+    let paymentDetailsHtml = '';
+    if (isReleased && pd.method) {
+      paymentDetailsHtml = `
+        <div class="payment-details-grid">
+          <span class="lbl">Date:</span>
+          <span class="val">${formatDate(pd.date || d.releasedAt)}</span>
+          <span class="lbl">Method:</span>
+          <span class="val">${escapeHtml(pd.method)}</span>
+          <span class="lbl">Ref/Check No.:</span>
+          <span class="val" style="font-family:monospace;">${escapeHtml(pd.reference || '—')}</span>
+          <span class="lbl">Bank/Branch:</span>
+          <span class="val">${escapeHtml(pd.bank || '—')}</span>
+        </div>
+      `;
+    } else {
+      paymentDetailsHtml = `
+        <div class="payment-details-grid">
+          <span class="lbl">Date:</span>
+          <span class="payment-details-line"></span>
+          <span class="lbl">Method:</span>
+          <span class="payment-details-line"></span>
+          <span class="lbl">Check/Ref No.:</span>
+          <span class="payment-details-line"></span>
+          <span class="lbl">Bank/Branch:</span>
+          <span class="payment-details-line"></span>
+        </div>
+      `;
+    }
+
+    const amountInWords = this._numberToWords(d.amount) + ' PESOS ONLY';
+    const cleanAmountString = formatPHP(d.amount).replace('₱', '').trim();
 
     doc.body.innerHTML = `
-      <div style="text-align:center; margin-bottom:4px;">
-        <div style="font-size:14pt; font-weight:700; letter-spacing:1px;">${entity} Accounting Services Firm</div>
-      </div>
-      <div style="border-bottom:2px solid #1e293b; margin-bottom:16px;"></div>
-
-      <div class="doc-title">Expense Report</div>
-
-      <div class="details-bar">
-        <span><strong>Ref No.:</strong> ${d.id}</span>
-        <span><strong>Date Submitted:</strong> ${formatDate(d.submittedAt)}</span>
-        <span><strong>Status:</strong> <span class="status-badge ${statusClass}">${statusText}</span></span>
+      <div class="header-container" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 12px;">
+        <div class="logo-box">
+          ${noLogo ? '' : `<img class="logo-img" src="ERP_Assets/${entity === 'LTA' ? 'LTA-LOGO.jpg' : 'ATA-LOGO.jpg'}" alt="${entity} Logo">`}
+          <span style="font-size: 14pt; font-weight: 700; color: #0f172a; letter-spacing: 0.5px; white-space: nowrap;">${entity} Accounting Services Firm</span>
+        </div>
+        <div class="title-box">
+          <h1 class="doc-title">Expense Report</h1>
+        </div>
       </div>
 
       <div class="two-col">
-        <div class="col">
+        <div class="col-left">
           <h3>Employee / Requester</h3>
-          <p><strong>${emp?.name || '—'}</strong></p>
-          <p>${requester?.email || '—'}</p>
+          <p><strong>${safe.empName}</strong></p>
+          <p style="color: #475569; font-size: 9pt; margin-top: 4px;">${safe.requesterEmail}</p>
+          <p style="color: #64748b; font-size: 8.5pt; margin-top: 2px;">Requested By: ${safe.requesterName}</p>
         </div>
-        <div class="col">
-          <h3>Linked Project</h3>
-          <p><strong>${wr?.title || '—'}</strong></p>
-          <p>Client: ${client?.name || '—'}</p>
-          <p>${client?.tin ? 'TIN: ' + client.tin : ''}</p>
+        <div class="col-right">
+          <div class="meta-row">
+            <span class="meta-label">Ref No.:</span>
+            <span class="meta-val">${d.id}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Date Submitted:</span>
+            <span class="meta-val">${formatDate(d.submittedAt)}</span>
+          </div>
+          ${safe.wr ? `
+          <div class="meta-row" style="margin-top: 6px; border-top: 1px dashed #cbd5e1; padding-top: 6px;">
+            <span class="meta-label">Project Code:</span>
+            <span class="meta-val" style="font-size: 8.5pt;">${safe.wrTitle}</span>
+          </div>
+          ` : ''}
         </div>
       </div>
 
       <table>
         <thead>
-          <tr><th>Category</th><th>Description</th><th>Fund Source</th><th class="num">Amount</th></tr>
+          <tr>
+            <th>Category</th>
+            <th>Description</th>
+            <th>Fund Source</th>
+            <th class="num">Amount</th>
+          </tr>
         </thead>
         <tbody>
-          <tr><td>${d.category}</td><td>${d.description}</td><td>${this.getFundSource(d)}</td><td class="num">${formatPHP(d.amount)}</td></tr>
+          <tr>
+            <td style="font-weight: 600;">${safe.category}</td>
+            <td>${safe.description}</td>
+            <td>${this.getFundSource(d)}</td>
+            <td class="num" style="font-weight: 700; font-family: monospace;">${formatPHP(d.amount)}</td>
+          </tr>
         </tbody>
       </table>
 
-      <div class="totals">
-        <div class="totals-row"><span>Amount in Words</span><span>${this._numberToWords(d.amount)} PESOS ONLY</span></div>
-        <div class="totals-row grand"><span>Total Amount</span><span>${formatPHP(d.amount)}</span></div>
+      <div class="totals-container">
+        <div class="amount-words-box">
+          <strong>Amount in Words</strong>
+          ${amountInWords}
+        </div>
+        <div class="amount-val-box">
+          <span class="total-label">Total Amount:</span>
+          <div class="total-amount-box">
+            <div class="total-currency">PHP</div>
+            <div class="total-val">${cleanAmountString}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom-layout">
+        <div class="payment-details-box">
+          <h4>Payment Details</h4>
+          ${paymentDetailsHtml}
+        </div>
       </div>
 
       <div class="signature-row">
         <div class="signature-box">
-          <div class="line">Prepared By<br><span style="font-size:8pt;color:#64748b;">${emp?.name || '—'} / Date</span></div>
+          <div style="height: 50px;"></div>
+          <div class="line">
+            ${safe.empName}
+            <span>Prepared By / Date</span>
+          </div>
         </div>
         <div class="signature-box">
-          <div class="line">Approved By<br><span style="font-size:8pt;color:#64748b;">${approver?.name || '—'} / Date</span></div>
+          <div style="height: 50px;"></div>
+          <div class="line">
+            ${safe.approverName}
+            <span>Approved By / Date</span>
+          </div>
         </div>
-      </div>
-
-      <div class="footer">
-        This Expense Report is issued for internal audit and reimbursement tracking purposes.<br>
-        For questions, contact ${entity} Accounting Services Firm.<br>
-        Original copy retained for BIR audit trail.
+        <div class="signature-box">
+          <div style="height: 50px;"></div>
+          <div class="line">
+            ${safe.releaserName}
+            <span>Released By / Date</span>
+          </div>
+        </div>
       </div>
     `;
 
@@ -1146,16 +1942,17 @@ const Disbursement = {
   },
 
   generateVoucher(d) {
-    const emp = DB.getById('users', this.getEmployeeId(d));
-    const requester = DB.getById('users', d.requestedBy);
-    const approver = d.approvedBy ? DB.getById('users', d.approvedBy) : null;
-    const handler = d.paymentHandledBy ? DB.getById('users', d.paymentHandledBy) : null;
-    const wr = d.linkedWorkRequestId ? DB.getById('workRequests', d.linkedWorkRequestId) : null;
-    const client = wr ? DB.getById('clients', wr.clientId) : null;
+    const noLogo = true;
+    const safe = this._getSanitizedViewModel(d);
     const entity = d.entity || 'ATA';
     const w = window.open('', '_blank');
     if (!w) return;
     const doc = w.document;
+
+    const baseHref = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+    const base = doc.createElement('base');
+    base.href = baseHref;
+    doc.head.appendChild(base);
 
     const title = doc.createElement('title');
     title.textContent = 'Payment Voucher ' + d.id;
@@ -1164,36 +1961,56 @@ const Disbursement = {
     const style = doc.createElement('style');
     style.textContent = `
       @page { size: A4; margin: 15mm 20mm; }
-      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; line-height: 1.5; color: #1e293b; max-width: 210mm; margin: 0 auto; padding: 0; }
-      .doc-title { text-align: center; font-size: 16pt; font-weight: 700; letter-spacing: 4px; margin: 0 0 16px; text-transform: uppercase; }
+      body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1e293b; max-width: 210mm; margin: 0 auto; padding: 0; }
+      .header-container { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 12px; }
+      .logo-box { display: flex; align-items: center; gap: 12px; max-height: 55px; }
+      .logo-img { ${entity === 'LTA' ? 'height: 42px; margin-bottom: 5px;' : 'height: 55px;'} display: block; }
+      .title-box { text-align: right; }
+      .doc-title { font-size: 18pt; font-weight: 700; letter-spacing: 4px; text-transform: uppercase; color: #0f172a; margin: 0; }
+      
       .page-break { page-break-before: always; }
+      
+      .two-col { display: flex; justify-content: space-between; gap: 24px; margin-bottom: 20px; }
+      .col-left { flex: 1.2; border: 1.5px solid #1e293b; padding: 12px; border-radius: 2px; background: #fff; }
+      .col-left h3 { font-size: 8.5pt; text-transform: uppercase; color: #64748b; margin: 0 0 6px 0; font-weight: 700; letter-spacing: 0.5px; border-bottom: 1px solid #cbd5e1; padding-bottom: 4px; }
+      .col-left p { margin: 2px 0; font-size: 10pt; }
+      
+      .col-right { flex: 0.8; display: flex; flex-direction: column; justify-content: center; font-size: 9.5pt; border: 1.5px dashed #cbd5e1; padding: 12px; border-radius: 2px; }
+      .meta-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+      .meta-row:last-child { margin-bottom: 0; }
+      .meta-label { color: #64748b; font-weight: 600; text-transform: uppercase; font-size: 8pt; letter-spacing: 0.5px; }
+      .meta-val { font-weight: 700; color: #0f172a; }
+      
       .section { margin-bottom: 20px; }
-      .section h3 { font-size: 10pt; text-transform: uppercase; color: #64748b; margin: 0 0 8px; letter-spacing: 0.5px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
-      .section p { margin: 4px 0; font-size: 10pt; }
-      .section strong { color: #334155; }
-      .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-      .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
-      .box { border: 1px solid #cbd5e1; border-radius: 4px; padding: 12px; }
-      table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10pt; }
-      th { background: #f8fafc; border-bottom: 2px solid #1e293b; padding: 8px; text-align: left; font-weight: 600; text-transform: uppercase; font-size: 9pt; }
-      td { padding: 8px; border-bottom: 1px solid #e2e8f0; }
+      .section h3 { font-size: 9pt; text-transform: uppercase; color: #475569; margin: 0 0 8px; letter-spacing: 0.5px; border-bottom: 1.5px solid #cbd5e1; padding-bottom: 4px; font-weight: 700; }
+      .section p { margin: 4px 0; font-size: 9.5pt; }
+      
+      table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 9.5pt; }
+      th { background: #f8fafc; border-top: 1.5px solid #1e293b; border-bottom: 1.5px solid #1e293b; padding: 8px 6px; text-align: left; font-weight: 700; text-transform: uppercase; font-size: 8pt; color: #334155; letter-spacing: 0.5px; }
+      td { padding: 8px 6px; border-bottom: 1px solid #e2e8f0; color: #0f172a; }
       .num { text-align: right; }
-      .amount-words { font-style: italic; font-size: 10pt; color: #475569; margin-top: 4px; }
-      .approval-row { display: flex; justify-content: space-between; margin-top: 48px; gap: 24px; }
+      
+      .grid-2 { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; }
+      .box { border: 1.5px solid #1e293b; padding: 10px; border-radius: 2px; background: #fff; }
+      .amount-words { font-size: 8.5pt; color: #475569; line-height: 1.4; margin-top: 4px; text-transform: uppercase; }
+      
+      .payment-status-box { border: 1.5px solid #cbd5e1; border-radius: 2px; background: #f8fafc; padding: 10px; margin-top: 8px; color: #1e293b; font-size: 9pt; }
+      
+      .approval-row { display: flex; justify-content: space-between; margin-top: 40px; gap: 20px; }
       .approval-box { flex: 1; text-align: center; }
-      .approval-box .line { border-top: 1px solid #1e293b; margin-top: 40px; padding-top: 4px; font-size: 9pt; }
-      .footer { margin-top: 24px; font-size: 8pt; color: #64748b; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 8px; }
-      .pay-status { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 9pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
-      .pay-status.paid { background: #dcfce7; color: #166534; }
-      .pay-status.unpaid { background: #fee2e2; color: #991b1b; }
+      .approval-box .line { border-top: 1.5px solid #1e293b; padding-top: 6px; font-size: 9pt; font-weight: 700; color: #0f172a; }
+      .approval-box .line span { font-size: 8pt; color: #64748b; font-weight: 500; display: block; margin-top: 2px; }
+      
+      .footer { margin-top: 30px; font-size: 8pt; color: #64748b; text-align: center; border-top: 1.5px solid #e2e8f0; padding-top: 10px; }
+      .thank-you { font-weight: 700; font-size: 10pt; color: #334155; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
     `;
     doc.head.appendChild(style);
 
     const amountWords = this._numberToWords(d.amount) + ' PESOS ONLY';
     const isReleased = d.status === 'Released';
     const pd = d.paymentDetails || {};
+    const cleanAmountString = formatPHP(d.amount).replace('₱', '').trim();
 
-    // Build dynamic payment details section
     let paymentDetailsHtml = '';
     if (isReleased && pd.method) {
       const methodCfg = PaymentIcons;
@@ -1203,36 +2020,37 @@ const Disbursement = {
       let detailRows = '';
       const addRow = (label, value) => {
         if (!value) return '';
-        return `<div style="display:flex; justify-content:space-between; align-items:baseline; font-size:0.8125rem; padding:3px 0;">
-          <span style="color:#94a3b8; font-weight:500;">${label}</span>
-          <span style="color:#334155; font-weight:600; text-align:right;">${value}</span>
+        return `<div style="display:flex; justify-content:space-between; align-items:baseline; font-size:8.5pt; padding:3px 0; border-bottom: 1px dashed #f1f5f9;">
+          <span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">${label}</span>
+          <span style="color:#0f172a; font-weight:700;">${escapeHtml(value)}</span>
         </div>`;
       };
 
       if (pd.reference) detailRows += addRow('Reference / Check No.', pd.reference);
       if (pd.bank) detailRows += addRow('Bank', pd.bank);
-      detailRows += addRow('Processed By', handler ? handler.name : '—');
+      detailRows += addRow('Released By', safe.releaser ? safe.releaser.name : (safe.handler ? safe.handler.name : '—'));
       detailRows += addRow('Date of Release', formatDate(pd.date || d.releasedAt));
 
       paymentDetailsHtml = `
         <div class="section">
           <h3>Payment Record</h3>
-          <div class="box" style="margin-bottom:12px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-              <div>
-                <div style="font-weight:700; font-size:1.25rem; color:#1e293b; line-height:1.2;">${formatPHP(d.amount)}</div>
-                <div style="font-size:0.75rem; color:#94a3b8; margin-top:2px;">${formatDate(pd.date || d.releasedAt)}</div>
+          <div class="grid-2">
+            <div class="box" style="display: flex; flex-direction: column; justify-content: space-between;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <div>
+                  <div style="font-weight:700; font-size:1.15rem; color:#0f172a; line-height:1.2; font-family: monospace;">${formatPHP(d.amount)}</div>
+                  <div style="font-size:7.5pt; color:#64748b; margin-top:2px;">Released on ${formatDate(pd.date || d.releasedAt)}</div>
+                </div>
+                <span style="display:inline-flex; align-items:center; gap:6px; padding:3px 8px; border-radius:12px; font-size:7.5pt; font-weight:700; color:${cfg.color}; background:${cfg.bg}; letter-spacing:0.3px; border: 1px solid ${cfg.color}33;">
+                  ${cfg.label}
+                </span>
               </div>
-              <span style="display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:20px; font-size:0.75rem; font-weight:700; color:${cfg.color}; background:${cfg.bg}; letter-spacing:0.3px;">
-                ${cfg.svg} ${cfg.label}
-              </span>
+              <div style="height:1px; background:#e2e8f0; margin:4px 0 8px;"></div>
+              <div style="display:flex; flex-direction:column; gap:4px;">${detailRows}</div>
             </div>
-            <div style="height:1px; background:#e2e8f0; margin:0 0 12px;"></div>
-            <div style="display:flex; flex-direction:column; gap:6px;">${detailRows}</div>
-          </div>
-          <div class="box" style="background:#dcfce7; border-color:#10b981;">
-            <p><strong>Status: FUNDS RELEASED</strong></p>
-            <p style="font-size:9pt;">Payment has been authorized and released by ${handler?.name || 'assigned handler'}.</p>
+            <div class="payment-status-box" style="display: flex; flex-direction: column; justify-content: center; height: 100%; box-sizing: border-box;">
+              <p style="margin: 0; font-size:9.5pt; line-height: 1.5; color: #1e293b;">Payment has been authorized by <strong>${safe.approverName}</strong> and released by <strong>${safe.releaserName}</strong>.</p>
+            </div>
           </div>
         </div>`;
     } else {
@@ -1240,41 +2058,60 @@ const Disbursement = {
         <div class="section">
           <h3>Payment Details</h3>
           <div class="grid-2">
-            <div class="box">
-              <p><strong>Amount in Figures:</strong> ${formatPHP(d.amount)}</p>
-              <p class="amount-words"><strong>Amount in Words:</strong> ${amountWords}</p>
+            <div class="box" style="display: flex; flex-direction: column; justify-content: space-between;">
+              <p style="margin: 0 0 8px 0; font-size: 9.5pt;"><strong>Amount in Figures:</strong> <span style="font-family: monospace; font-weight: 700;">${formatPHP(d.amount)}</span></p>
+              <p class="amount-words" style="margin: 0;"><strong>Amount in Words:</strong> <span style="font-weight: 600;">${amountWords}</span></p>
             </div>
-            <div class="box">
-              <p><strong>Payment Mode:</strong> ___________________</p>
-              <p><strong>Check / Ref No.:</strong> ___________________</p>
-              <p><strong>Bank / Platform:</strong> ___________________</p>
-              <p><strong>Date:</strong> ___________________</p>
+            <div class="box" style="display: flex; flex-direction: column; gap: 4px; font-size: 8.5pt;">
+              <div style="display: flex; justify-content: space-between;"><span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">Payment Mode:</span> <span style="border-bottom: 1px solid #94a3b8; width: 100px; height: 12px; display: inline-block;"></span></div>
+              <div style="display: flex; justify-content: space-between;"><span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">Check / Ref No.:</span> <span style="border-bottom: 1px solid #94a3b8; width: 100px; height: 12px; display: inline-block;"></span></div>
+              <div style="display: flex; justify-content: space-between;"><span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">Bank / Platform:</span> <span style="border-bottom: 1px solid #94a3b8; width: 100px; height: 12px; display: inline-block;"></span></div>
+              <div style="display: flex; justify-content: space-between;"><span style="color:#64748b; font-weight:600; text-transform:uppercase; font-size:7.5pt;">Date:</span> <span style="border-bottom: 1px solid #94a3b8; width: 100px; height: 12px; display: inline-block;"></span></div>
             </div>
           </div>
         </div>`;
     }
 
+    const thankYouText = 'THANK YOU !!!';
+    const entityFooterContact = entity === 'LTA' 
+      ? 'Should you have any enquiries concerning this statement, please contact us on 742-8582/404-4928.<br>' 
+      : '';
+
     doc.body.innerHTML = `
-      <div style="text-align:center; margin-bottom:4px;">
-        <div style="font-size:14pt; font-weight:700; letter-spacing:1px;">${entity} Accounting Services Firm</div>
-      </div>
-      <div style="border-bottom:2px solid #1e293b; margin-bottom:16px;"></div>
-
-      <div class="doc-title">Payment Voucher</div>
-
-      <div class="grid-2">
-        <div class="box">
-          <h3>Voucher Details</h3>
-          <p><strong>Voucher No.:</strong> PV-${d.id}</p>
-          <p><strong>Date:</strong> ${formatDate(new Date().toISOString().slice(0, 10))}</p>
-          <p><strong>Reference Expense:</strong> ${d.id}</p>
-          <p><strong>Category:</strong> ${d.category}</p>
+      <div class="header-container" style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; border-bottom: 2px solid #1e293b; padding-bottom: 12px;">
+        <div class="logo-box">
+          ${noLogo ? '' : `<img class="logo-img" src="ERP_Assets/${entity === 'LTA' ? 'LTA-LOGO.jpg' : 'ATA-LOGO.jpg'}" alt="${entity} Logo">`}
+          <span style="font-size: 14pt; font-weight: 700; color: #0f172a; letter-spacing: 0.5px; white-space: nowrap;">${entity} Accounting Services Firm</span>
         </div>
-        <div class="box">
+        <div class="title-box">
+          <h1 class="doc-title">Payment Voucher</h1>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="col-left">
           <h3>Payee Information</h3>
-          <p><strong>${emp?.name || '—'}</strong></p>
-          <p>${requester?.email || '—'}</p>
-          <p>Fund Source: ${this.getFundSource(d)}</p>
+          <p><strong>${safe.empName}</strong></p>
+          <p style="color: #475569; font-size: 9pt; margin-top: 4px;">${safe.requesterEmail}</p>
+          <p style="color: #64748b; font-size: 8.5pt; margin-top: 2px;">Fund Source: ${this.getFundSource(d)}</p>
+        </div>
+        <div class="col-right">
+          <div class="meta-row">
+            <span class="meta-label">Voucher No.:</span>
+            <span class="meta-val">PV-${d.id}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Date:</span>
+            <span class="meta-val">${formatDate(new Date().toISOString().slice(0, 10))}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Expense Ref:</span>
+            <span class="meta-val">${d.id}</span>
+          </div>
+          <div class="meta-row">
+            <span class="meta-label">Category:</span>
+            <span class="meta-val">${safe.category}</span>
+          </div>
         </div>
       </div>
 
@@ -1284,41 +2121,82 @@ const Disbursement = {
         <h3>Account Distribution (PFRS Chart of Accounts)</h3>
         <table>
           <thead>
-            <tr><th>Account Code</th><th>Account Title</th><th class="num">Debit</th><th class="num">Credit</th></tr>
+            <tr>
+              <th>Account Code</th>
+              <th>Account Title</th>
+              <th class="num">Debit</th>
+              <th class="num">Credit</th>
+            </tr>
           </thead>
           <tbody>
-            <tr><td>61010</td><td>${d.category} Expense</td><td class="num">${formatPHP(d.amount)}</td><td class="num">—</td></tr>
-            <tr><td>11010</td><td>Cash in Bank / Petty Cash</td><td class="num">—</td><td class="num">${formatPHP(d.amount)}</td></tr>
+            <tr>
+              <td style="font-family: monospace;">61010</td>
+              <td>${safe.category} Expense</td>
+              <td class="num" style="font-family: monospace;">${formatPHP(d.amount)}</td>
+              <td class="num">—</td>
+            </tr>
+            <tr>
+              <td style="font-family: monospace;">11010</td>
+              <td>Cash in Bank / Petty Cash</td>
+              <td class="num">—</td>
+              <td class="num" style="font-family: monospace;">${formatPHP(d.amount)}</td>
+            </tr>
           </tbody>
         </table>
       </div>
 
       <div class="section page-break">
         <h3>Supporting Documents</h3>
-        <p>☐ Expense Report Ref. ${d.id} dated ${formatDate(d.submittedAt)}</p>
-        <p>☐ Receipt / Proof of Payment: ${d.receiptFilename || '_________________'}</p>
-        <p>☐ Work Request: ${wr?.title || '—'}</p>
-        <p>☐ Release Document: ${d.releaseFilename || '_________________'}</p>
+        <p style="font-size: 9pt; color: #334155; margin: 6px 0;">☐ Expense Report Ref. ${d.id} dated ${formatDate(d.submittedAt)}</p>
+        <p style="font-size: 9pt; color: #334155; margin: 6px 0;">☐ Receipt / Proof of Payment: <span style="font-family: monospace; font-weight: 600;">${safe.receiptFilename}</span></p>
+        <p style="font-size: 9pt; color: #334155; margin: 6px 0;">☐ Work Request: <span style="font-weight: 600;">${safe.wrTitle}</span></p>
+        <p style="font-size: 9pt; color: #334155; margin: 6px 0;">☐ Release Document: <span style="font-family: monospace; font-weight: 600;">${safe.releaseFilename}</span></p>
       </div>
 
       <div class="approval-row">
         <div class="approval-box">
-          <div class="line">Prepared By<br><span style="font-size:8pt;color:#64748b;">${emp?.name || '—'} / Date</span></div>
+          <div style="height: 45px;"></div>
+          <div class="line">
+            ${safe.empName}
+            <span>Prepared By / Date</span>
+          </div>
         </div>
         <div class="approval-box">
-          <div class="line">Reviewed By<br><span style="font-size:8pt;color:#64748b;">Signature / Printed Name / Date</span></div>
+          <div style="height: 45px;"></div>
+          <div class="line">
+            HENRY WONG
+            <span>Reviewed By / Date</span>
+          </div>
         </div>
         <div class="approval-box">
-          <div class="line">Approved By<br><span style="font-size:8pt;color:#64748b;">${approver?.name || '—'} / Date</span></div>
+          <div style="height: 45px;"></div>
+          <div class="line">
+            ${safe.approverName}
+            <span>Approved By / Date</span>
+          </div>
         </div>
         <div class="approval-box">
-          <div class="line">Received By<br><span style="font-size:8pt;color:#64748b;">Payee Signature / Printed Name / Date</span></div>
+          <div style="height: 45px;"></div>
+          <div class="line">
+            ${safe.releaserName}
+            <span>Released By / Date</span>
+          </div>
+        </div>
+        <div class="approval-box">
+          <div style="height: 45px;"></div>
+          <div class="line">
+            ________________________
+            <span>Received By / Date</span>
+          </div>
         </div>
       </div>
 
       <div class="footer">
+        <div class="thank-you">${thankYouText}</div>
+        ${noLogo ? '' : entityFooterContact}
         This Payment Voucher is prepared in accordance with PFRS, RR No. 9-2009, and RMO No. 29-2002.<br>
-        Retain for BIR audit trail. Original copy retained by ${entity} Accounting Services Firm.
+        Retain for BIR audit trail. ${noLogo ? '' : `Original copy retained by ${entity} Accounting Services Firm.<br>`}
+        <span style="font-weight: 600; text-transform: uppercase; font-size: 7.5pt; letter-spacing: 0.5px; color: #475569; display: block; margin-top: 4px;">This document is not valid for claim of input tax.</span>
       </div>
     `;
 
@@ -1376,24 +2254,26 @@ const Disbursement = {
 
   showTemplateForm() {
     const entity = Auth.activeEntity;
+    const container = el('div');
 
-    const overlay = el('div', { class: 'modal-overlay' });
-    const modal = el('div', { class: 'modal' });
+    // Notion-style icon header (title is now the inline borderless title field)
+    const titleSec = el('div', { class: 'side-pane-form-title' });
+    titleSec.appendChild(el('div', { class: 'side-pane-icon', text: '📋' }));
+    container.appendChild(titleSec);
 
-    const modalHeader = el('div', { class: 'modal-header' });
-    modalHeader.appendChild(el('h3', { class: 'modal-title', text: 'New Disbursement Template' }));
-    const closeBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '×' });
-    closeBtn.addEventListener('click', () => overlay.remove());
-    modalHeader.appendChild(closeBtn);
-    modal.appendChild(modalHeader);
+    const formWrap = el('div', { class: 'side-pane-form-content' });
+    const form = el('form', { class: 'form-stacked notion-form', id: 'disb-tpl-form' });
 
-    const modalBody = el('div', { class: 'modal-body' });
-    const form = el('form', { class: 'form-stacked' });
-
-    const nameGroup = el('div', { class: 'form-group' });
-    nameGroup.appendChild(el('label', { text: 'Template Name *' }));
-    nameGroup.appendChild(el('input', { type: 'text', name: 'name', required: true }));
-    form.appendChild(nameGroup);
+    // ── Title free-form ──
+    const titleSection = el('div', { class: 'notion-freeform notion-freeform--title' });
+    titleSection.appendChild(el('label', { class: 'notion-section-label', text: 'Template Name' }));
+    const nameInput = el('input', {
+      type: 'text', name: 'name', class: 'notion-freeform-input notion-title-input',
+      placeholder: 'New Disbursement Template', required: true
+    });
+    titleSection.appendChild(nameInput);
+    setTimeout(() => { nameInput.focus(); }, 60);
+    form.appendChild(titleSection);
 
     const catGroup = el('div', { class: 'form-group' });
     catGroup.appendChild(el('label', { text: 'Category *' }));
@@ -1455,9 +2335,6 @@ const Disbursement = {
     invGroup.appendChild(invSel);
     form.appendChild(invGroup);
 
-    const submitBtn = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Save Template' });
-    form.appendChild(submitBtn);
-
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       if (!validateRequiredFields(form)) return;
@@ -1477,20 +2354,33 @@ const Disbursement = {
         createdBy: Auth.user.id
       };
       DB.insert('disbursementTemplates', template);
-      overlay.remove();
       this.view = 'templates';
-      App.handleRoute();
+      closeFormPanelAndRoute();
     });
 
-    modalBody.appendChild(form);
-    modal.appendChild(modalBody);
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
+    formWrap.appendChild(form);
+    container.appendChild(formWrap);
+
+    // Sticky footer
+    const footer = el('div', { class: 'side-pane-form-footer' });
+    footer.appendChild(el('button', { type: 'submit', form: 'disb-tpl-form', class: 'btn btn-primary', text: 'Save Template' }));
+    const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => closeFormPanelAndRoute());
+    footer.appendChild(cancelBtn);
+    container.appendChild(footer);
+
+    if (window.SidePaneInstance && typeof window.SidePaneInstance.open === 'function') {
+      window.SidePaneInstance.open({
+        title: 'New Disbursement Template',
+        content: container,
+        viewContext: 'disbursement-template-form'
+      });
+    }
   },
 
   generateFromTemplate(template) {
     const record = {
-      id: generateId('d'),
+      id: generateSequentialId('dis', 'disbursements'),
       category: template.category,
       description: template.description || template.name,
       amount: template.amount,
@@ -1501,7 +2391,7 @@ const Disbursement = {
       fromTemplate: template.id,
       employeeId: Auth.user.id,
       requestedBy: Auth.user.id,
-      status: 'Submitted',
+      status: 'Draft',
       submittedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       receiptFilename: null,
@@ -1531,16 +2421,15 @@ const Disbursement = {
   // ============================================================
   renderReport() {
     const entity = Auth.activeEntity;
-    const items = DB.getWhere('disbursements', d => d.entity === entity && d.status === 'Released');
+    const items = DB.getWhere('disbursements', d => {
+      const dEnt = (d.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(dEnt);
+      }
+      return dEnt === entity.toUpperCase();
+    }).filter(d => d.status === 'Released');
 
-    const container = el('div', { class: 'page' });
-
-    // Top actions bar
-    const topActions = el('div', { class: 'actions-bar', style: 'margin-bottom: var(--spacing-lg);' });
-    const topBackBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '← Back to List' });
-    topBackBtn.addEventListener('click', () => { this.view = 'list'; App.handleRoute(); });
-    topActions.appendChild(topBackBtn);
-    container.appendChild(topActions);
+    const container = el('div');
 
     container.appendChild(el('h2', { text: 'Reimbursement Summary', style: 'margin-bottom: var(--spacing-lg);' }));
 

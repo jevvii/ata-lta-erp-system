@@ -17,28 +17,186 @@ const Transmittal = {
       const titleBar = el('div', { class: 'page-title-bar-v2' });
       const h1 = el('h1', { class: 'breadcrumb-h1' });
       const baseLink = el('a', { href: 'javascript:void(0)', class: 'breadcrumb-base', text: 'Transmittal' });
-      baseLink.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
+      baseLink.addEventListener('click', () => { location.hash = '#transmittal'; });
       h1.appendChild(baseLink);
       h1.appendChild(el('span', { class: 'breadcrumb-sep', text: ' / ' }));
       h1.appendChild(document.createTextNode(t?.trackingNumber || 'Detail'));
       titleBar.appendChild(h1);
       
-      const backBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '← Back to List' });
-      backBtn.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
-      titleBar.appendChild(backBtn);
+      const actions = el('div', { class: 'title-bar-actions' });
+      if (t) {
+        if (Auth.can('transmittal:mark')) {
+          if (t.status === 'Draft') {
+            const editBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Edit', style: 'margin-right:8px;' });
+            editBtn.addEventListener('click', () => { this.showForm(t.id); });
+            actions.appendChild(editBtn);
+            const sendBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'Mark as Sent', style: 'margin-right:8px;' });
+            sendBtn.addEventListener('click', () => {
+              Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
+                const markData = {
+                  status: 'Sent',
+                  sentAt: new Date().toISOString(),
+                  sentBy: Auth.user.id
+                };
+                if (Auth.canBypassReview('transmittals')) {
+                  // Admin marks are applied immediately
+                  DB.update('transmittals', t.id, markData);
+                } else {
+                  // Manager/Documentation: pending Admin approval
+                  const record = Object.assign({}, t, markData, { id: t.id });
+                  PendingChanges.submit('transmittals', record, false);
+                }
+                App.handleRoute();
+              }, 'success');
+            });
+            actions.appendChild(sendBtn);
+          } else if (t.status === 'Sent') {
+            const ackBtn = el('button', { class: 'btn btn-success btn-sm', text: 'Acknowledge Receipt', style: 'margin-right:8px;' });
+            ackBtn.addEventListener('click', () => {
+              this.showAcknowledgeDialog(t.id);
+            });
+            actions.appendChild(ackBtn);
+          }
+        }
+
+        const printBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Print Transmittal', style: 'margin-right:8px;' });
+        printBtn.addEventListener('click', () => this.openPrintLetter(t));
+        actions.appendChild(printBtn);
+      }
+      const backBtn = el('button', { class: 'btn btn-secondary btn-sm', text: '← Back to List' });
+      backBtn.addEventListener('click', () => { location.hash = '#transmittal'; });
+      actions.appendChild(backBtn);
+      titleBar.appendChild(actions);
       container.appendChild(titleBar);
-    } else {
-      container.appendChild(el('h1', { text: 'Transmittal' }));
+    } else if (this.view === 'form') {
+      container.classList.add('transmittal-tab-page');
+      if (!Auth.can('transmittal:create')) {
+        this.view = 'list';
+      } else {
+        const isNew = !this.detailId;
+        const existing = isNew ? null : DB.getById('transmittals', this.detailId);
+        container.appendChild(buildFormBreadcrumb({
+          baseLabel: 'Transmittal',
+          baseHash: '#transmittal',
+          currentText: isNew ? 'New Transmittal' : (existing?.trackingNumber || 'Edit Transmittal'),
+          actions: [
+            { text: '← Back to List', class: 'btn btn-secondary btn-sm', onClick: () => { location.hash = '#transmittal'; } }
+          ]
+        }));
+      }
+    } else if (this.view === 'list') {
+      container.classList.add('transmittal-tab-page');
+      const titleBar = el('div', { class: 'page-title-bar-v2' });
+      titleBar.appendChild(el('h1', { text: 'Transmittal' }));
+      container.appendChild(titleBar);
+      container.appendChild(this.renderTabNav());
     }
 
     if (this.view === 'list') container.appendChild(this.renderList());
     else if (this.view === 'form') container.appendChild(this.renderForm());
     else if (this.view === 'detail') container.appendChild(this.renderDetail());
 
+    setTimeout(() => this.updateStickyOffsets(), 0);
     return container;
   },
 
-  init() {},
+  init() {
+    this.updateStickyOffsets();
+  },
+
+  updateStickyOffsets() {
+    App.updateStickyOffsets();
+  },
+
+  renderTabNav() {
+    const tabNav = el('div', { class: 'module-tab-nav' });
+
+    const entity = Auth.activeEntity;
+    const count = DB.getWhere('transmittals', t => {
+      const tEnt = (t.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(tEnt);
+      }
+      return tEnt === entity.toUpperCase();
+    }).length;
+
+    const tabs = [
+      { key: 'list', label: 'Transmittals', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>', count: count }
+    ];
+
+    tabs.forEach(tab => {
+      const btn = el('button', { class: 'module-tab-link active' });
+      btn.appendChild(parseHTML(tab.icon));
+      btn.appendChild(document.createTextNode(' ' + tab.label));
+      if (tab.count !== undefined) {
+        btn.appendChild(document.createTextNode(' '));
+        btn.appendChild(el('span', { class: 'module-badge-count', text: String(tab.count) }));
+      }
+      tabNav.appendChild(btn);
+    });
+
+    const canCreate = Auth.can('transmittal:create');
+    const canRequest = Auth.can('transmittal:request');
+
+    if (canCreate && canRequest) {
+      const wrapper = el('div', { class: 'split-btn-group' });
+
+      const primaryBtn = el('button', {
+        class: 'btn btn-primary btn-sm split-btn-left'
+      });
+      primaryBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New Transmittal';
+      primaryBtn.addEventListener('click', () => {
+        this.showForm();
+      });
+      wrapper.appendChild(primaryBtn);
+
+      const toggleBtn = el('button', {
+        class: 'btn btn-primary btn-sm split-btn-right'
+      });
+      toggleBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+      wrapper.appendChild(toggleBtn);
+
+      const menu = el('div', { class: 'dropdown-menu split-btn-menu hidden' });
+
+      const requestItem = el('button', { class: 'dropdown-item' });
+      requestItem.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> Request Transmittal';
+      requestItem.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.add('hidden');
+        Transmittal.showRequestTransmittalModal();
+      });
+
+      menu.appendChild(requestItem);
+      wrapper.appendChild(menu);
+
+      toggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menu.classList.toggle('hidden');
+      });
+
+      tabNav.appendChild(wrapper);
+    } else if (canCreate) {
+      const addBtn = el('button', {
+        class: 'btn btn-primary btn-sm',
+        style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;',
+        html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New Transmittal'
+      });
+      addBtn.addEventListener('click', () => {
+        this.showForm();
+      });
+      tabNav.appendChild(addBtn);
+    } else if (canRequest) {
+      const reqBtn = el('button', {
+        class: 'btn btn-primary btn-sm',
+        style: 'margin-left: 16px; display: inline-flex; align-items: center; gap: 6px;'
+      });
+      reqBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg> Request Transmittal';
+      reqBtn.addEventListener('click', () => { Transmittal.showRequestTransmittalModal(); });
+      tabNav.appendChild(reqBtn);
+    }
+
+    return tabNav;
+  },
 
   // ============================================================
   // Helpers
@@ -81,53 +239,96 @@ const Transmittal = {
   renderList() {
     const entity = Auth.activeEntity;
 
-    const actions = el('div', { class: 'actions-bar' });
-    const addBtn = el('button', { class: 'btn btn-primary', text: 'Create Transmittal' });
-    addBtn.addEventListener('click', () => { this.view = 'form'; this.detailId = null; App.handleRoute(); });
-    actions.appendChild(addBtn);
-
     const wrapper = el('div');
-    wrapper.appendChild(actions);
+    const stickyContainer = el('div', { class: 'toolbar-sticky-container' });
+    const filters = el('div', { class: 'filters-bar' });
 
-    // Filters bar
-    const filtersBar = el('div', { class: 'filters-bar' });
+
+
+    // Pending operations requests banner
+    if (Auth.can('transmittal:create')) {
+      const pendingReqs = DB.getWhere('operationsRequests', r => r.status === 'pending' && r.type === 'transmittal');
+      if (pendingReqs.length > 0) {
+        const banner = el('div', { class: 'pending-requests-banner', style: 'background:var(--color-bg-muted);border:1px solid var(--color-warning);border-radius:var(--radius-md);padding:var(--spacing-md);margin-bottom:var(--spacing-md);' });
+        const bannerTitle = el('div', { style: 'font-weight:600;color:var(--color-text);margin-bottom:var(--spacing-sm);font-size:0.95rem;' });
+        bannerTitle.textContent = `⚠ ${pendingReqs.length} Pending Transmittal Request${pendingReqs.length > 1 ? 's' : ''} from Operations`;
+        banner.appendChild(bannerTitle);
+        pendingReqs.forEach(req => {
+          const row = el('div', { style: 'display:flex;align-items:center;justify-content:space-between;padding:var(--spacing-xs) 0;border-bottom:1px solid var(--color-border);' });
+          const client = DB.getById('clients', req.clientId);
+          const wr = DB.getById('workRequests', req.workRequestId);
+          const info = el('span', { style: 'font-size:0.875rem;color:var(--color-text);' });
+          info.textContent = `${client ? client.name : 'Unknown Client'} – ${wr ? wr.title : 'Unknown WR'} (requested by ${req.requestedBy || 'N/A'})`;
+          row.appendChild(info);
+          const fulfillBtn = el('button', { class: 'btn btn-primary', text: 'Fulfill', style: 'padding:2px 12px;font-size:0.8rem;' });
+          fulfillBtn.addEventListener('click', () => { Transmittal.prefilledWrId = req.workRequestId; Transmittal.prefilledClientId = req.clientId; Transmittal.prefilledRequestId = req.id; location.hash = '#transmittal/form'; });
+          row.appendChild(fulfillBtn);
+          banner.appendChild(row);
+        });
+        wrapper.appendChild(banner);
+      }
+    }
 
     const wrFilter = el('select', { class: 'form-select', style: 'max-width:200px' });
     wrFilter.appendChild(el('option', { value: '', text: 'All Work Requests' }));
-    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
+    DB.getWhere('workRequests', wr => {
+      const wrEnt = (wr.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
+      }
+      return wrEnt === entity.toUpperCase();
+    }).forEach(wr => {
       wrFilter.appendChild(el('option', { value: wr.id, text: wr.title }));
     });
-    filtersBar.appendChild(wrFilter);
+    filters.appendChild(wrapFilterFieldWithClear(wrFilter));
 
-    const clientFilter = el('select', { class: 'form-select', style: 'max-width:200px' });
-    clientFilter.appendChild(el('option', { value: '', text: 'All Clients' }));
-    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
-      clientFilter.appendChild(el('option', { value: c.id, text: c.name }));
+    const clientOptions = [{ value: '', text: 'All Clients' }];
+    DB.getWhere('clients', c => {
+      const clientEnt = (c.entity || '').toUpperCase();
+      if (entity === 'ALL') {
+        return Auth.user.entities.map(ae => ae.toUpperCase()).includes(clientEnt);
+      }
+      return clientEnt === entity.toUpperCase();
+    }).forEach(c => {
+      clientOptions.push({ value: c.id, text: c.name });
     });
-    filtersBar.appendChild(clientFilter);
+    const clientFilter = createSearchableDropdown({ placeholder: 'All Clients', options: clientOptions, maxWidth: '200px' });
+    filters.appendChild(clientFilter);
 
-    const empFilter = el('select', { class: 'form-select', style: 'max-width:200px' });
-    empFilter.appendChild(el('option', { value: '', text: 'All Employees' }));
-    DB.getWhere('users', u => u.entities?.map(e => e.toUpperCase()).includes(entity)).forEach(u => {
-      empFilter.appendChild(el('option', { value: u.id, text: u.name }));
+    const empOptions = [{ value: '', text: 'All Employees' }];
+    DB.getWhere('users', u => {
+      const userEnts = (u.entities || []).map(e => e.toUpperCase());
+      if (entity === 'ALL') {
+        return userEnts.some(e => Auth.user.entities.map(ae => ae.toUpperCase()).includes(e));
+      }
+      return userEnts.includes(entity.toUpperCase());
+    }).forEach(u => {
+      empOptions.push({ value: u.id, text: u.name });
     });
-    filtersBar.appendChild(empFilter);
+    (DB.getAll('tasks') || []).forEach(t => {
+      const name = (t.assigneeName || '').trim();
+      if (name && !empOptions.some(opt => opt.value === name || opt.text === name)) {
+        empOptions.push({ value: name, text: name });
+      }
+    });
+    const empFilter = createSearchableDropdown({ placeholder: 'All Employees', options: empOptions, maxWidth: '200px' });
+    filters.appendChild(empFilter);
 
     const statusFilter = el('select', { class: 'form-select', style: 'max-width:150px' });
     statusFilter.appendChild(el('option', { value: '', text: 'All Statuses' }));
     ['Draft', 'Sent', 'Acknowledged'].forEach(s => statusFilter.appendChild(el('option', { value: s, text: s })));
-    filtersBar.appendChild(statusFilter);
+    filters.appendChild(wrapFilterFieldWithClear(statusFilter));
 
-    const dateFrom = el('input', { type: 'date', class: 'form-select', style: 'max-width:140px' });
-    const dateTo = el('input', { type: 'date', class: 'form-select', style: 'max-width:140px' });
-    filtersBar.appendChild(el('span', { text: 'From:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
-    filtersBar.appendChild(dateFrom);
-    filtersBar.appendChild(el('span', { text: 'To:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
-    filtersBar.appendChild(dateTo);
+    const dateFrom = el('input', { type: 'date', class: 'form-select' });
+    const dateTo = el('input', { type: 'date', class: 'form-select' });
+    filters.appendChild(el('span', { text: 'From:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+    filters.appendChild(wrapFilterFieldWithClear(dateFrom));
+    filters.appendChild(el('span', { text: 'To:', style: 'font-size:0.75rem;color:var(--color-text-muted);' }));
+    filters.appendChild(wrapFilterFieldWithClear(dateTo));
 
     const clearBtn = el('button', {
-      class: 'btn btn-ghost btn-sm',
-      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: middle;"><path d="M23 4v6h-6"></path><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path></svg>Clear'
+      class: 'btn btn-secondary btn-sm',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: middle;"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-3.5"></path></svg>Clear'
     });
     clearBtn.addEventListener('click', () => {
       wrFilter.value = '';
@@ -136,44 +337,94 @@ const Transmittal = {
       statusFilter.value = '';
       dateFrom.value = '';
       dateTo.value = '';
+      App.clearSavedFilters('transmittals');
       updateFilters();
     });
-    filtersBar.appendChild(clearBtn);
+    filters.appendChild(clearBtn);
 
-    wrapper.appendChild(filtersBar);
+    // Restore saved filters
+    const savedFilters = App.restoreFilters('transmittals');
+    if (savedFilters) {
+      if (savedFilters.workRequest) wrFilter.value = savedFilters.workRequest;
+      if (savedFilters.client) clientFilter.value = savedFilters.client;
+      if (savedFilters.employee) empFilter.value = savedFilters.employee;
+      if (savedFilters.status) statusFilter.value = savedFilters.status;
+      if (savedFilters.dateFrom) dateFrom.value = savedFilters.dateFrom;
+      if (savedFilters.dateTo) dateTo.value = savedFilters.dateTo;
+    }
+
+    const saveCurrentFilters = () => {
+      App.saveFilters('transmittals', {
+        workRequest: wrFilter.value,
+        client: clientFilter.value,
+        employee: empFilter.value,
+        status: statusFilter.value,
+        dateFrom: dateFrom.value,
+        dateTo: dateTo.value
+      });
+    };
 
     // View mode toggle
-    const viewToggle = el('div', { class: 'view-mode-toggle', style: 'margin-bottom:var(--spacing-md);' });
+    const vmToggle = el('div', { class: 'view-mode-toggle' });
     const viewIcons = { 'Table': ViewIcons.table, 'Board': ViewIcons.board, 'List': ViewIcons.list };
     [['Table', 'table'], ['Board', 'board'], ['List', 'list']].forEach(([label, mode]) => {
       const btn = el('button', { html: (viewIcons[label] || '') + ' ' + label, class: this.listViewMode === mode ? 'active' : '' });
       btn.addEventListener('click', () => {
+        saveCurrentFilters();
         App.setPreferredViewMode('transmittals', mode);
         App.handleRoute();
       });
-      viewToggle.appendChild(btn);
+      vmToggle.appendChild(btn);
     });
-    wrapper.appendChild(viewToggle);
+
+    stickyContainer.appendChild(filters);
+    stickyContainer.appendChild(vmToggle);
+    wrapper.appendChild(stickyContainer);
 
     const listContainer = el('div');
     wrapper.appendChild(listContainer);
 
-    const updateFilters = () => this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, statusFilter.value, dateFrom.value, dateTo.value);
-    [wrFilter, clientFilter, empFilter, statusFilter, dateFrom, dateTo].forEach(f => f.addEventListener('change', updateFilters));
+    const updateFilters = () => this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, statusFilter.value, dateFrom.value, dateTo.value, empFilter.searchText, clientFilter.searchText);
+    [wrFilter, clientFilter, empFilter, statusFilter, dateFrom, dateTo].forEach(f => f.addEventListener('change', () => { saveCurrentFilters(); updateFilters(); }));
+    [empFilter, clientFilter].forEach(el => el.addEventListener('input', () => { saveCurrentFilters(); updateFilters(); }));
 
-    this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, statusFilter.value, dateFrom.value, dateTo.value);
+    this.refreshList(listContainer, wrFilter.value, clientFilter.value, empFilter.value, statusFilter.value, dateFrom.value, dateTo.value, empFilter.searchText, clientFilter.searchText);
     return wrapper;
   },
 
-  refreshList(container, wrFilter, clientFilter, empFilter, statusFilter, dateFrom, dateTo) {
+  refreshList(container, wrFilter, clientFilter, empFilter, statusFilter, dateFrom, dateTo, empSearchText, clientSearchText) {
     while (container.firstChild) container.removeChild(container.firstChild);
     const entity = Auth.activeEntity;
 
     let items = DB.getWhere('transmittals', t => (entity === 'ALL' ? Auth.user.entities.includes(t.entity) : t.entity === entity));
 
     if (wrFilter) items = items.filter(t => t.workRequestId === wrFilter);
-    if (clientFilter) items = items.filter(t => t.clientId === clientFilter);
-    if (empFilter) items = items.filter(t => t.createdBy === empFilter || t.sentBy === empFilter || t.acknowledgedBy === empFilter);
+    if (clientFilter || (clientSearchText && clientSearchText.trim() !== '')) {
+      const selectedClient = clientFilter ? DB.getById('clients', clientFilter) : null;
+      if (selectedClient && selectedClient.name === clientSearchText) {
+        items = items.filter(t => t.clientId === clientFilter);
+      } else if (clientSearchText && clientSearchText.trim() !== '') {
+        const query = clientSearchText.trim().toLowerCase();
+        items = items.filter(t => {
+          const client = DB.getById('clients', t.clientId);
+          return client && client.name.toLowerCase().includes(query);
+        });
+      }
+    }
+
+    if (empSearchText && empSearchText.trim() !== '') {
+      const query = empSearchText.trim().toLowerCase();
+      items = items.filter(t => {
+        const creator = t.createdBy ? DB.getById('users', t.createdBy) : null;
+        const sender = t.sentBy ? DB.getById('users', t.sentBy) : null;
+        const acknowledger = t.acknowledgedBy ? DB.getById('users', t.acknowledgedBy) : null;
+        return (creator && creator.name.toLowerCase().includes(query)) ||
+               (sender && sender.name.toLowerCase().includes(query)) ||
+               (acknowledger && acknowledger.name.toLowerCase().includes(query));
+      });
+    } else if (empFilter) {
+      items = items.filter(t => t.createdBy === empFilter || t.sentBy === empFilter || t.acknowledgedBy === empFilter);
+    }
     if (statusFilter) items = items.filter(t => t.status === statusFilter);
     if (dateFrom) {
       const fromTime = new Date(dateFrom).getTime();
@@ -230,9 +481,14 @@ const Transmittal = {
       tr.appendChild(tdStatus);
       tr.appendChild(el('td', { text: String((t.items || []).length) }));
       const tdAct = el('td');
-      const viewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'View' });
-      viewBtn.addEventListener('click', () => { this.view = 'detail'; this.detailId = t.id; App.handleRoute(); });
+      const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
+      viewBtn.addEventListener('click', () => { location.hash = '#transmittal/detail/' + t.id; });
       tdAct.appendChild(viewBtn);
+      if (this.canEditTransmittal(t)) {
+        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit', style: 'margin-left:4px;' });
+        editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(t.id); });
+        tdAct.appendChild(editBtn);
+      }
       tr.appendChild(tdAct);
       tbody.appendChild(tr);
     });
@@ -242,10 +498,20 @@ const Transmittal = {
 
   renderBoardView(container, items) {
     if (items.length === 0) {
-      container.appendChild(el('p', { text: 'No transmittals found.', class: 'empty-state' }));
+      container.appendChild(renderEmptyStateV2({
+        variant: 'zero-state',
+        icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+        title: 'No transmittals found',
+        body: 'Create a transmittal to start tracking document delivery.'
+      }));
       return;
     }
-    const board = el('div', { class: 'board-v2' });
+
+    const canCreate = Auth.can('transmittal:create');
+    const canEdit = Auth.can('transmittal:edit');
+    const canMark = Auth.can('transmittal:mark');
+    const self = this;
+
     const statuses = ['Draft', 'Sent', 'Acknowledged'];
     const statusColors = {
       'Draft': '#94a3b8',
@@ -254,54 +520,162 @@ const Transmittal = {
     };
 
     statuses.forEach(st => {
-      const colColor = statusColors[st] || '#cbd5e1';
-      const col = el('div', { class: 'board-column-v2' });
-      col.style.borderTop = `4px solid ${colColor}`;
-      
-      const header = el('div', { class: 'board-column-header-v2' });
-      header.appendChild(el('div', { class: 'board-column-title', text: st }));
-      col.appendChild(header);
-
-      const colItems = items.filter(t => t.status === st);
-      const cardContainer = el('div', { class: 'board-cards-scroll' });
-
-      colItems.forEach(t => {
-        const clientName = this.getClientName(t.clientId);
-        const itemCount = (t.items || []).length;
-
-        const card = el('div', { class: 'board-card-v2' });
-        card.style.borderLeftColor = colColor;
-        card.addEventListener('click', () => { this.view = 'detail'; this.detailId = t.id; App.handleRoute(); });
-
-        // Top: Status path and Date
-        const topRow = el('div', { class: 'card-v2-top' });
-        topRow.appendChild(el('span', { class: 'card-v2-category', text: `${t.status} >` }));
-        const date = t.sentAt || t.createdAt;
-        topRow.appendChild(el('span', { class: 'card-v2-date', text: formatDate(date) }));
-        card.appendChild(topRow);
-
-        // Title Row
-        const titleRow = el('div', { class: 'card-v2-title-row' });
-        titleRow.appendChild(el('div', { class: 'card-v2-title', text: t.trackingNumber }));
-        card.appendChild(titleRow);
-
-        // Subtitle: Client and Item Count
-        card.appendChild(el('div', { text: `${clientName} • ${itemCount} items`, style: 'font-size:0.875rem;color:#64748b;margin-bottom:12px;' }));
-
-        // Meta: Details
-        const metaRow = el('div', { class: 'card-v2-meta' });
-        const wr = DB.getById('workRequests', t.workRequestId);
-        if (wr) {
-          metaRow.appendChild(el('div', { class: 'card-v2-meta-text', text: wr.title, style: 'font-weight:600;color:#1e293b;font-size:0.75rem;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' }));
-        }
-        card.appendChild(metaRow);
-
-        cardContainer.appendChild(card);
+      const colItems = items.filter(t => t.status === st && !t.pendingChangeId);
+      colItems.sort((a, b) => {
+        const oa = typeof a.boardOrder === 'number' ? a.boardOrder : null;
+        const ob = typeof b.boardOrder === 'number' ? b.boardOrder : null;
+        if (oa !== null && ob !== null) return oa - ob;
+        if (oa !== null) return -1;
+        if (ob !== null) return 1;
+        return new Date(a.createdAt || a.sentAt || 0) - new Date(b.createdAt || b.sentAt || 0);
       });
-      col.appendChild(cardContainer);
-      board.appendChild(col);
+      colItems.forEach((t, idx) => {
+        const newOrder = (idx + 1) * 1000;
+        if (t.boardOrder !== newOrder) {
+          t.boardOrder = newOrder;
+          DB.update('transmittals', t.id, { boardOrder: newOrder });
+        }
+      });
     });
-    container.appendChild(board);
+
+    let cardNumber = 1;
+
+    KanbanBoard.render({
+      container,
+      items,
+      columns: statuses.map(st => {
+        const col = {
+          key: st,
+          label: st,
+          targetStatus: st,
+          color: statusColors[st] || '#cbd5e1',
+          emptyState: st === 'Draft' && canCreate ? false : { variant: 'compact', title: 'No transmittals', body: '' }
+        };
+        if (st === 'Draft' && canCreate) {
+          col.addButton = { label: 'Add Transmittal', onClick: () => self.showForm() };
+          col.addCard = { label: 'Add Transmittal', onClick: () => self.showForm() };
+        }
+        return col;
+      }),
+      renderCard(t) {
+        const clientName = self.getClientName(t.clientId);
+        const itemCount = (t.items || []).length;
+        const date = t.sentAt || t.createdAt;
+
+        const statusPriorityClass = {
+          'Draft': 'card-v2-priority-normal',
+          'Sent': 'card-v2-priority-medium',
+          'Acknowledged': 'card-v2-priority-low'
+        }[t.status] || 'card-v2-priority-normal';
+
+        const progressMap = { 'Draft': 0, 'Sent': 50, 'Acknowledged': 100 };
+        const progress = progressMap[t.status] || 0;
+
+        const wr = DB.getById('workRequests', t.workRequestId);
+        const detail = wr ? wr.title : '';
+
+        return buildCompactBoardCard({
+          key: 'TX-' + cardNumber++,
+          progress,
+          statusColor: statusColors[t.status] || '#cbd5e1',
+          title: t.trackingNumber,
+          description: clientName,
+          detail: `${itemCount} item${itemCount === 1 ? '' : 's'}` + (detail ? ` • ${detail}` : ''),
+          date: date ? formatDate(date) : '',
+          priority: t.status,
+          priorityClass: statusPriorityClass,
+          onClick: () => { location.hash = '#transmittal/detail/' + t.id; }
+        });
+      },
+      cardMenuItems(t) {
+        const menu = [{
+          label: 'View Details',
+          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+          onClick: () => { location.hash = '#transmittal/detail/' + t.id; }
+        }];
+        if (self.canEditTransmittal(t)) {
+          menu.push({
+            label: 'Edit',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>',
+            onClick: () => self.showForm(t.id)
+          });
+        }
+        if (canMark && t.status === 'Draft' && !t.pendingChangeId) {
+          menu.push({
+            label: 'Mark as Sent',
+            className: 'primary',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>',
+            onClick: () => Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
+              const markData = { status: 'Sent', sentAt: new Date().toISOString(), sentBy: Auth.user.id };
+              if (Auth.canBypassReview('transmittals')) {
+                DB.update('transmittals', t.id, markData);
+              } else {
+                const record = Object.assign({}, t, markData, { id: t.id });
+                PendingChanges.submit('transmittals', record, false);
+              }
+              App.handleRoute();
+            }, 'success')
+          });
+        }
+        if (canMark && t.status === 'Sent') {
+          menu.push({
+            label: 'Acknowledge Receipt',
+            className: 'primary',
+            icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+            onClick: () => self.showAcknowledgeDialog(t.id)
+          });
+        }
+        return menu;
+      },
+      drag: {
+        enabled: true,
+        canDrag: t => canEdit && !t.pendingChangeId,
+        canDrop: ({ item, targetStatus }) => {
+          if (item.status === targetStatus) return true;
+          const flow = ['Draft', 'Sent', 'Acknowledged'];
+          const currentIdx = flow.indexOf(item.status);
+          const targetIdx = flow.indexOf(targetStatus);
+          if (currentIdx === -1 || targetIdx === -1) return false;
+          return targetIdx > currentIdx;
+        },
+        orderField: 'boardOrder',
+        onDrop({ item, targetStatus, newOrder, fromStatus }) {
+          if (fromStatus === targetStatus) {
+            DB.update('transmittals', item.id, { boardOrder: newOrder });
+            App.handleRoute();
+            return;
+          }
+
+          // Block if pending admin approval
+          if (item.pendingChangeId) {
+            Workflow.showMessage('Pending Approval', 'This transmittal is pending administrative approval and cannot be moved.', 'warning');
+            return;
+          }
+
+          // Block Sent if no items attached
+          if (targetStatus === 'Sent' && (!item.items || item.items.length === 0)) {
+            Workflow.showMessage('Incomplete Transmittal', 'Cannot send — transmittal has no items attached.', 'warning');
+            return;
+          }
+
+          const label = item.trackingNumber || item.id;
+          const applyMove = () => {
+            const changes = { boardOrder: newOrder, status: targetStatus, updatedAt: new Date().toISOString() };
+            if (targetStatus === 'Sent') changes.sentAt = new Date().toISOString();
+            if (targetStatus === 'Acknowledged') changes.acknowledgedAt = new Date().toISOString();
+            DB.update('transmittals', item.id, changes);
+            App.handleRoute();
+          };
+
+          // Confirm both Sent and Acknowledged
+          const msgs = {
+            'Sent': `Mark transmittal "${label}" as Sent? This indicates the documents have been dispatched.`,
+            'Acknowledged': `Mark transmittal "${label}" as Acknowledged by the recipient?`
+          };
+          Workflow.showConfirm('Confirm Status Change', msgs[targetStatus], applyMove, 'success');
+        }
+      }
+    });
   },
 
   renderCompactListView(container, items) {
@@ -312,12 +686,42 @@ const Transmittal = {
       left.appendChild(el('div', { class: 'list-item-title', text: t.trackingNumber }));
       left.appendChild(el('div', { class: 'list-item-meta', text: this.getClientName(t.clientId) + ' • ' + this.getWorkRequestTitle(t.workRequestId) + ' • ' + String((t.items || []).length) + ' items' }));
       item.appendChild(left);
-      const viewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'View' });
-      viewBtn.addEventListener('click', () => { this.view = 'detail'; this.detailId = t.id; App.handleRoute(); });
+      const viewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'View' });
+      viewBtn.addEventListener('click', () => { location.hash = '#transmittal/detail/' + t.id; });
       item.appendChild(viewBtn);
+      if (this.canEditTransmittal(t)) {
+        const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit', style: 'margin-left:4px;' });
+        editBtn.addEventListener('click', (e) => { e.stopPropagation(); this.showForm(t.id); });
+        item.appendChild(editBtn);
+      }
       list.appendChild(item);
     });
     container.appendChild(list);
+  },
+
+  canEditTransmittal(t) {
+    return Auth.can('transmittal:edit') && t.status === 'Draft';
+  },
+
+  showForm(txId = null) {
+    this.detailId = txId;
+    const isNew = !txId;
+    const existing = isNew ? null : DB.getById('transmittals', txId);
+    const fullPageRoute = isNew ? '#transmittal/form/new' : `#transmittal/form/${txId}`;
+
+    openFormPanel({
+      icon: '📨',
+      title: isNew ? 'Create Transmittal' : `Edit Transmittal — ${existing?.trackingNumber || ''}`.trim(),
+      formContent: this.renderForm(),
+      formId: 'transmittal-form',
+      viewContext: 'transmittal-form',
+      fullPageRoute,
+      newTabRoute: fullPageRoute,
+      actions: [
+        { text: isNew ? 'Create Transmittal' : 'Save Changes', class: 'btn btn-primary', type: 'submit', form: 'transmittal-form' },
+        { text: 'Cancel', class: 'btn btn-secondary', onClick: () => closeFormPanelAndRoute('#transmittal') }
+      ]
+    });
   },
 
   // ============================================================
@@ -330,102 +734,124 @@ const Transmittal = {
 
     const container = el('div');
 
-    // Form header bar
     const headerBar = el('div', { class: 'form-header-bar' });
-    headerBar.appendChild(el('h2', { text: isNew ? 'Create Transmittal' : 'Edit Transmittal' }));
     const headerActions = el('div', { class: 'form-actions-top' });
-    const saveTopBtn = el('button', { type: 'button', class: 'btn btn-primary', text: isNew ? 'Create Transmittal' : 'Save Changes' });
-    saveTopBtn.addEventListener('click', () => { this.submitForm(form); });
-    headerActions.appendChild(saveTopBtn);
-    const cancelBtn = el('button', { type: 'button', class: 'btn btn-ghost', text: 'Cancel' });
-    cancelBtn.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
+    const saveBtnTop = el('button', { type: 'submit', form: 'transmittal-form', class: 'btn btn-primary', text: isNew ? 'Create Transmittal' : 'Save Changes' });
+    headerActions.appendChild(saveBtnTop);
+    const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
+    cancelBtn.addEventListener('click', () => closeFormPanelAndRoute('#transmittal'));
     headerActions.appendChild(cancelBtn);
     headerBar.appendChild(headerActions);
     container.appendChild(headerBar);
 
-    const form = el('form', { id: 'transmittal-form', class: 'form-stacked' });
+    const form = el('form', { id: 'transmittal-form', class: 'form-stacked notion-form' });
 
-    // Work Request
-    const wrGroup = el('div', { class: 'form-group' });
-    wrGroup.appendChild(el('label', { text: 'Work Request *' }));
-    const wrSel = el('select', { name: 'workRequestId', required: true });
-    wrSel.appendChild(el('option', { value: '', text: '— Select Work Request —' }));
-    DB.getWhere('workRequests', wr => wr.entity === entity).forEach(wr => {
-      const opt = el('option', { value: wr.id, text: wr.title });
-      if (existing && existing.workRequestId === wr.id) opt.selected = true;
-      wrSel.appendChild(opt);
+    // ── Top property grid ──
+    const propsGrid = el('div', { class: 'notion-property-grid' });
+
+    // Client
+    const clientGroup = el('div', { class: 'notion-prop' });
+    clientGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> Client *' }));
+    const clientSel = el('select', { name: 'clientId', required: true, class: 'notion-prop-select' });
+    clientSel.appendChild(el('option', { value: '', text: '— Select —' }));
+    DB.getWhere('clients', c => c.entity === entity).forEach(c => {
+      const opt = el('option', { value: c.id, text: c.name });
+      if (existing && existing.clientId === c.id) opt.selected = true;
+      else if (!existing && this.prefilledClientId && this.prefilledClientId === c.id) opt.selected = true;
+      clientSel.appendChild(opt);
     });
-    wrGroup.appendChild(wrSel);
-    form.appendChild(wrGroup);
+    clientGroup.appendChild(clientSel);
+    propsGrid.appendChild(clientGroup);
 
-    // Client display (auto-populated from WR)
-    const clientGroup = el('div', { class: 'form-group' });
-    clientGroup.appendChild(el('label', { text: 'Client' }));
-    const clientDisplay = el('input', { type: 'text', name: 'clientDisplay', disabled: true, value: existing ? this.getClientName(existing.clientId) : '' });
-    clientGroup.appendChild(clientDisplay);
-    const clientIdInput = el('input', { type: 'hidden', name: 'clientId', value: existing ? existing.clientId : '' });
-    clientGroup.appendChild(clientIdInput);
-    form.appendChild(clientGroup);
+    // Work Request (filtered by selected client)
+    const wrGroup = el('div', { class: 'notion-prop' });
+    wrGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg> Work Request *' }));
+    const wrSel = el('select', { name: 'workRequestId', required: true, class: 'notion-prop-select' });
+    wrSel.appendChild(el('option', { value: '', text: '— Select —' }));
+    wrGroup.appendChild(wrSel);
+    propsGrid.appendChild(wrGroup);
+
+    // Tracking Number
+    const tnGroup = el('div', { class: 'notion-prop' });
+    tnGroup.appendChild(el('label', { html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h3M4 17v3h3M20 7V4h-3M20 17v3h-3M9 9h6v6H9z"/></svg> Tracking Number' }));
+    const tnWrap = el('div', { class: 'notion-input-with-btn' });
+    const tnInput = el('input', { type: 'text', name: 'trackingNumber', class: 'notion-prop-input', readonly: true, value: existing ? existing.trackingNumber : '' });
+    tnInput.style.flex = '1';
+    tnWrap.appendChild(tnInput);
+    const genBtn = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'Generate' });
+    genBtn.addEventListener('click', () => { tnInput.value = this.generateTrackingNumber(entity); });
+    tnWrap.appendChild(genBtn);
+    tnGroup.appendChild(tnWrap);
+    propsGrid.appendChild(tnGroup);
+
+    form.appendChild(propsGrid);
+
+    const populateWRs = (extraWrIds = new Set()) => {
+      const selectedClientId = clientSel.value;
+      const currentWR = wrSel.value;
+      while (wrSel.firstChild) wrSel.removeChild(wrSel.firstChild);
+      wrSel.appendChild(el('option', { value: '', text: '— Select —' }));
+      let matchedCurrent = false;
+      DB.getWhere('workRequests', wr => {
+        if (wr.entity !== entity) return false;
+        return extraWrIds.has(wr.id) || !selectedClientId || wr.clientId === selectedClientId;
+      }).forEach(wr => {
+        const opt = el('option', { value: wr.id, text: wr.title });
+        if (wr.id === currentWR) { opt.selected = true; matchedCurrent = true; }
+        wrSel.appendChild(opt);
+      });
+      if (!matchedCurrent) wrSel.value = '';
+    };
+
+    clientSel.addEventListener('change', () => populateWRs());
 
     wrSel.addEventListener('change', () => {
       const wr = DB.getById('workRequests', wrSel.value);
-      if (wr) {
-        clientDisplay.value = this.getClientName(wr.clientId);
-        clientIdInput.value = wr.clientId;
-      } else {
-        clientDisplay.value = '';
-        clientIdInput.value = '';
+      if (wr?.clientId && clientSel.value !== wr.clientId) {
+        clientSel.value = wr.clientId;
+        const extra = new Set(wr.id ? [wr.id] : []);
+        populateWRs(extra);
+        wrSel.value = wr.id;
       }
     });
 
-    // Tracking Number
-    const tnGroup = el('div', { class: 'form-group' });
-    tnGroup.appendChild(el('label', { text: 'Tracking Number' }));
-    const tnWrap = el('div', { style: 'display:flex; gap: var(--spacing-sm); align-items:center;' });
-    const tnInput = el('input', { type: 'text', name: 'trackingNumber', readonly: true, value: existing ? existing.trackingNumber : '' });
-    tnInput.style.flex = '1';
-    tnWrap.appendChild(tnInput);
-    const genBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'Generate' });
-    genBtn.addEventListener('click', () => {
-      tnInput.value = this.generateTrackingNumber(entity);
+    // Initial population
+    const initialWRId = existing?.workRequestId || this.prefilledWrId || '';
+    const initialClientId = existing?.clientId || this.prefilledClientId || '';
+    if (initialClientId) clientSel.value = initialClientId;
+    const initialExtra = new Set(initialWRId ? [initialWRId] : []);
+    populateWRs(initialExtra);
+    if (initialWRId) wrSel.value = initialWRId;
+
+    // Itemized document list — Notion-style editable list
+    form.appendChild(el('h3', { class: 'notion-section-heading', text: 'Transmittal Items' }));
+    const itemsSection = el('div', { class: 'notion-line-items' });
+    const itemsList = el('div', { class: 'notion-line-item-list', id: 'transmittal-items-list' });
+    itemsSection.appendChild(itemsList);
+
+    const addRowBtn = el('button', {
+      type: 'button',
+      class: 'notion-add-line-item',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add item'
     });
-    tnWrap.appendChild(genBtn);
-    tnGroup.appendChild(tnWrap);
-    form.appendChild(tnGroup);
-
-    // Itemized document list
-    const itemsSection = el('div', { class: 'form-group' });
-    itemsSection.appendChild(el('label', { text: 'Items *' }));
-    const itemsTable = el('table', { class: 'data-table', style: 'margin-bottom: var(--spacing-sm);' });
-    const itemsThead = el('thead');
-    const itemsThr = el('tr');
-    ['Document Type', 'Description', ''].forEach(h => itemsThr.appendChild(el('th', { text: h })));
-    itemsThead.appendChild(itemsThr);
-    itemsTable.appendChild(itemsThead);
-    const itemsTbody = el('tbody');
-    itemsTbody.id = 'transmittal-items-tbody';
-    itemsTable.appendChild(itemsTbody);
-    itemsSection.appendChild(itemsTable);
-
-    const addRowBtn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '+ Add Item' });
-    addRowBtn.addEventListener('click', () => this.addItemRow(itemsTbody));
+    addRowBtn.addEventListener('click', () => this.addItemRow(itemsList));
     itemsSection.appendChild(addRowBtn);
     form.appendChild(itemsSection);
 
     // Pre-populate rows for existing
     if (existing && existing.items && existing.items.length > 0) {
-      existing.items.forEach(item => this.addItemRow(itemsTbody, item.description, item.documentType));
+      existing.items.forEach(item => this.addItemRow(itemsList, item.description, item.documentType));
     } else {
-      this.addItemRow(itemsTbody);
+      this.addItemRow(itemsList);
     }
 
-    // Notes
-    const notesGroup = el('div', { class: 'form-group' });
-    notesGroup.appendChild(el('label', { text: 'Notes' }));
-    const notesTextarea = el('textarea', { name: 'notes', rows: 3 });
+    // Notes — Notion free-form section
+    const notesSection = el('div', { class: 'notion-freeform' });
+    notesSection.appendChild(el('label', { class: 'notion-section-label', text: 'Notes' }));
+    const notesTextarea = el('textarea', { name: 'notes', class: 'notion-freeform-textarea', rows: 3, placeholder: 'Add any extra details...' });
     notesTextarea.textContent = existing ? (existing.notes || '') : '';
-    notesGroup.appendChild(notesTextarea);
-    form.appendChild(notesGroup);
+    notesSection.appendChild(notesTextarea);
+    form.appendChild(notesSection);
 
     form.addEventListener('submit', (e) => { e.preventDefault(); this.submitForm(form); });
 
@@ -433,36 +859,42 @@ const Transmittal = {
     return container;
   },
 
-  addItemRow(tbody, description = '', documentType = '') {
-    const tr = el('tr');
+  addItemRow(container, description = '', documentType = '') {
+    const row = el('div', { class: 'notion-line-item-row' });
 
-    const typeTd = el('td');
-    const typeSel = el('select', { class: 'item-doc-type', required: true });
-    typeSel.appendChild(el('option', { value: '', text: '— Select Type —' }));
+    const dragHandle = el('div', {
+      class: 'notion-line-item-drag',
+      title: 'Drag to reorder',
+      html: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/></svg>'
+    });
+    row.appendChild(dragHandle);
+
+    const typeSel = el('select', { class: 'item-doc-type notion-line-item-type', required: true });
+    typeSel.appendChild(el('option', { value: '', text: '— Type —' }));
     ['Original Scan', 'Generated Copy', 'Government Receipt', 'Final Deliverable', 'Other'].forEach(t => {
       const opt = el('option', { value: t, text: t });
       if (documentType === t) opt.selected = true;
       typeSel.appendChild(opt);
     });
-    typeTd.appendChild(typeSel);
-    tr.appendChild(typeTd);
+    row.appendChild(typeSel);
 
-    const descTd = el('td');
-    const descInput = el('input', { type: 'text', class: 'item-description', required: true, value: description, placeholder: 'Description' });
-    descTd.appendChild(descInput);
-    tr.appendChild(descTd);
+    const descInput = el('input', { type: 'text', class: 'item-description notion-line-item-desc', required: true, value: description, placeholder: 'Description' });
+    row.appendChild(descInput);
 
-    const actTd = el('td');
-    const remBtn = el('button', { type: 'button', class: 'btn btn-danger btn-sm', text: 'Remove' });
+    const remBtn = el('button', {
+      type: 'button',
+      class: 'notion-line-item-remove',
+      title: 'Remove',
+      html: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'
+    });
     remBtn.addEventListener('click', () => {
-      if (tbody.querySelectorAll('tr').length > 1) {
-        tbody.removeChild(tr);
+      if (container.querySelectorAll('.notion-line-item-row').length > 1) {
+        row.remove();
       }
     });
-    actTd.appendChild(remBtn);
-    tr.appendChild(actTd);
+    row.appendChild(remBtn);
 
-    tbody.appendChild(tr);
+    container.appendChild(row);
   },
 
   submitForm(form) {
@@ -471,10 +903,10 @@ const Transmittal = {
     const entity = Auth.activeEntity;
     const data = Object.fromEntries(new FormData(form).entries());
     const isNew = !this.detailId;
-    const tbody = document.getElementById('transmittal-items-tbody');
+    const itemsList = document.getElementById('transmittal-items-list');
 
     const items = [];
-    tbody.querySelectorAll('tr').forEach(row => {
+    itemsList.querySelectorAll('.notion-line-item-row').forEach(row => {
       const desc = row.querySelector('.item-description')?.value.trim();
       const type = row.querySelector('.item-doc-type')?.value;
       if (desc && type) {
@@ -543,31 +975,95 @@ const Transmittal = {
       }
     }
 
-    this.view = 'list';
-    this.detailId = null;
-    App.handleRoute();
+    // Fulfill pending operations request if any
+    const reqId = this.prefilledRequestId || (record.workRequestId ? DB.getWhere('operationsRequests', r => r.workRequestId === record.workRequestId && r.type === 'transmittal' && r.status === 'pending')[0]?.id : null);
+    if (reqId) {
+      DB.update('operationsRequests', reqId, {
+        status: 'fulfilled',
+        fulfilledBy: Auth.user.id,
+        fulfilledAt: new Date().toISOString(),
+        linkedRecordId: record.id
+      });
+    }
+    this.prefilledRequestId = null;
+    this.prefilledWrId = null;
+    this.prefilledClientId = null;
+
+    const msgConfig = {
+      title: isNew ? 'Transmittal Created' : 'Transmittal Updated',
+      message: 'Transmittal has been ' + (isNew ? 'created' : 'updated') + ' successfully.',
+      type: 'success'
+    };
+    closeFormPanelAndRoute('#transmittal', msgConfig);
   },
 
   // ============================================================
   // Detail View
   // ============================================================
+  showRequestTransmittalModal() {
+    const entity = Auth.activeEntity;
+    const wrs = DB.getWhere('workRequests', wr => {
+      const wrEnt = (wr.entity || '').toUpperCase();
+      if (entity === 'ALL') return Auth.user.entities.map(ae => ae.toUpperCase()).includes(wrEnt);
+      return wrEnt === entity.toUpperCase();
+    });
+
+    const wrapper = el('div', { class: 'form-stacked', style: 'display: flex; flex-direction: column;' });
+    const selectGroup = el('div', { class: 'form-group' });
+    selectGroup.appendChild(el('label', { text: 'Select Work Request *' }));
+    const wrSelect = el('select', { class: 'form-select', style: 'width:100%;' });
+    wrSelect.appendChild(el('option', { value: '', text: '— Select —' }));
+    wrs.forEach(wr => {
+      const client = DB.getById('clients', wr.clientId);
+      const pending = DB.getWhere('operationsRequests', r => r.workRequestId === wr.id && r.type === 'transmittal' && r.status === 'pending');
+      if (pending.length === 0) {
+        wrSelect.appendChild(el('option', { value: wr.id, text: `${wr.title} — ${client?.name || '—'}` }));
+      }
+    });
+    selectGroup.appendChild(wrSelect);
+    wrapper.appendChild(selectGroup);
+
+    const notesGroup = el('div', { class: 'form-group' });
+    notesGroup.appendChild(el('label', { text: 'Additional Notes (Optional)' }));
+    notesGroup.appendChild(el('textarea', { id: 'trans-opreq-notes', class: 'form-control', style: 'width: 100%; min-height: 80px;', placeholder: 'Provide any details for Documentation staff...' }));
+    wrapper.appendChild(notesGroup);
+
+    wrapper.appendChild(el('div', { style: 'display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px;' }, [
+      el('button', { id: 'btn-cancel-trans-opreq', class: 'btn btn-ghost', text: 'Cancel' }),
+      el('button', { id: 'btn-save-trans-opreq', class: 'btn btn-primary', text: 'Submit Request' })
+    ]));
+
+    const overlay = Workflow.showModal('Request Transmittal', wrapper);
+
+    overlay.querySelector('#btn-cancel-trans-opreq').addEventListener('click', () => overlay.remove());
+    overlay.querySelector('#btn-save-trans-opreq').addEventListener('click', () => {
+      const wrId = wrSelect.value;
+      if (!wrId) { alert('Please select a work request.'); return; }
+      const wr = DB.getById('workRequests', wrId);
+      const notes = overlay.querySelector('#trans-opreq-notes').value.trim();
+      const record = {
+        id: generateId('opreq'),
+        type: 'transmittal',
+        workRequestId: wrId,
+        clientId: wr.clientId,
+        requestedBy: Auth.user.id,
+        requestedAt: new Date().toISOString(),
+        status: 'pending',
+        rejectionReason: '',
+        notes
+      };
+      DB.insert('operationsRequests', record);
+      overlay.remove();
+      Workflow.showMessage('Request Submitted', 'Your transmittal request has been submitted to Documentation for review.', 'success');
+      App.handleRoute();
+    });
+  },
+
   renderDetail() {
     const t = DB.getById('transmittals', this.detailId);
-    if (!t) { this.view = 'list'; App.handleRoute(); return el('div'); }
+    if (!t) { location.hash = '#transmittal'; return el('div'); }
 
     const container = el('div', { class: 'invoice-detail' });
-
-    // Top actions bar
-    const topActions = el('div', { class: 'actions-bar', style: 'margin-bottom: var(--spacing-lg);' });
-    const topBackBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '← Back to List' });
-    topBackBtn.addEventListener('click', () => { this.view = 'list'; this.detailId = null; App.handleRoute(); });
-    topActions.appendChild(topBackBtn);
-
-    const printBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'Print Transmittal' });
-    printBtn.addEventListener('click', () => this.openPrintLetter(t));
-    topActions.appendChild(printBtn);
-
-    container.appendChild(topActions);
 
     // Header
     const header = el('div', { class: 'invoice-header' });
@@ -585,7 +1081,7 @@ const Transmittal = {
     }
     if (t.acknowledgedAt) {
       const ackBy = DB.getById('users', t.acknowledgedBy);
-      meta.appendChild(el('p', { text: 'Acknowledged: ' + formatDate(t.acknowledgedAt) + ' by ' + (ackBy?.name || '—') }));
+      meta.appendChild(el('p', { text: 'Acknowledged: ' + formatDate(t.acknowledgedAt) + ' by ' + (ackBy?.name || '—') + (t.receivedByName ? ` (Received by: ${t.receivedByName})` : '') }));
     }
     if (t.notes) meta.appendChild(el('p', { text: 'Notes: ' + t.notes }));
     container.appendChild(meta);
@@ -596,130 +1092,356 @@ const Transmittal = {
     letterSection.appendChild(this.buildLetterPreview(t));
     container.appendChild(letterSection);
 
-    // Actions
-    const actions = el('div', { class: 'form-actions', style: 'margin-top: var(--spacing-lg); border-top: 1px solid var(--color-border); padding-top: var(--spacing-lg);' });
-
-    if (t.status === 'Draft') {
-      const sendBtn = el('button', { class: 'btn btn-primary', text: 'Mark as Sent' });
-      sendBtn.addEventListener('click', () => {
-        Workflow.showConfirm('Confirm Sent', 'Are you sure you want to mark this transmittal as sent?', () => {
-          DB.update('transmittals', t.id, {
-            status: 'Sent',
-            sentAt: new Date().toISOString(),
-            sentBy: Auth.user.id
-          });
-          App.handleRoute();
-        }, 'success');
-      });
-      actions.appendChild(sendBtn);
-    } else if (t.status === 'Sent') {
-      const ackSection = el('div', { class: 'form-section' });
-      ackSection.appendChild(el('h4', { text: 'Acknowledgment' }));
-      const ackForm = el('form', { class: 'form-stacked' });
-
-      const nameGroup = el('div', { class: 'form-group' });
-      nameGroup.appendChild(el('label', { text: 'Received By (Name) *' }));
-      nameGroup.appendChild(el('input', { type: 'text', name: 'receivedBy', required: true }));
-      ackForm.appendChild(nameGroup);
-
-      const dateGroup = el('div', { class: 'form-group' });
-      dateGroup.appendChild(el('label', { text: 'Received Date *' }));
-      dateGroup.appendChild(el('input', { type: 'date', name: 'receivedDate', required: true, value: new Date().toISOString().slice(0, 10) }));
-      ackForm.appendChild(dateGroup);
-
-      const ackBtn = el('button', { type: 'submit', class: 'btn btn-success', text: 'Mark as Acknowledged' });
-      ackForm.appendChild(ackBtn);
-
-      ackForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        if (!validateRequiredFields(ackForm)) return;
-        const fd = new FormData(ackForm);
-        DB.update('transmittals', t.id, {
-          status: 'Acknowledged',
-          acknowledgedAt: fd.get('receivedDate'),
-          acknowledgedBy: Auth.user.id,
-          receivedByName: fd.get('receivedBy')
-        });
-        App.handleRoute();
-      });
-
-      ackSection.appendChild(ackForm);
-      actions.appendChild(ackSection);
-    }
-
-    container.appendChild(actions);
     return container;
+  },
+
+  showAcknowledgeDialog(id) {
+    const t = DB.getById('transmittals', id);
+    if (!t) return;
+
+    const form = el('form', { class: 'form-stacked' });
+
+    const nameGroup = el('div', { class: 'form-group' });
+    nameGroup.appendChild(el('label', { text: 'Received By (Name) *' }));
+    nameGroup.appendChild(el('input', { type: 'text', name: 'receivedBy', required: true, class: 'form-control' }));
+    form.appendChild(nameGroup);
+
+    const dateGroup = el('div', { class: 'form-group' });
+    dateGroup.appendChild(el('label', { text: 'Received Date *' }));
+    dateGroup.appendChild(el('input', { type: 'date', name: 'receivedDate', required: true, class: 'form-control', value: new Date().toISOString().slice(0, 10) }));
+    form.appendChild(dateGroup);
+
+    const submitBtn = el('button', { type: 'submit', class: 'btn btn-success', text: 'Confirm Acknowledgment', style: 'margin-top: 12px;' });
+    form.appendChild(submitBtn);
+
+    const overlay = Workflow.showModal('Acknowledge Transmittal Receipt', form);
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (!validateRequiredFields(form)) return;
+      const fd = new FormData(form);
+      const ackData = {
+        status: 'Acknowledged',
+        acknowledgedAt: fd.get('receivedDate'),
+        acknowledgedBy: Auth.user.id,
+        receivedByName: fd.get('receivedBy')
+      };
+      if (Auth.canBypassReview('transmittals')) {
+        // Admin acknowledgments are applied immediately
+        DB.update('transmittals', t.id, ackData);
+      } else {
+        // Manager/Documentation: pending Admin approval
+        const record = Object.assign({}, t, ackData, { id: t.id });
+        PendingChanges.submit('transmittals', record, false);
+      }
+      overlay.remove();
+      App.handleRoute();
+    });
   },
 
   buildLetterPreview(t) {
     const client = DB.getById('clients', t.clientId);
     const wr = DB.getById('workRequests', t.workRequestId);
-    const entityName = t.entity === 'ATA' ? 'ATA Accounting' : 'LTA Accounting';
+    const entity = t.entity || 'ATA';
+    const fromEntity = entity === 'ATA' ? 'ATA BUSINESS CONSULTANCY SERVICES' : 'LTA BUSINESS CONSULTANCY SERVICES';
 
-    const letter = el('div', { class: 'transmittal-letter' });
-
-    const header = el('div', { style: 'text-align:center; margin-bottom: var(--spacing-lg); border-bottom: 2px solid var(--color-border); padding-bottom: var(--spacing-md);' });
-    header.appendChild(el('h2', { text: entityName, style: 'margin:0; font-size:1.25rem;' }));
-    header.appendChild(el('p', { text: 'Transmittal', style: 'margin:0; font-size:0.875rem; color:var(--color-text-muted);' }));
-    letter.appendChild(header);
-
-    const metaBlock = el('div', { style: 'margin-bottom: var(--spacing-lg);' });
-    metaBlock.appendChild(el('p', { text: 'Date: ' + (t.sentAt ? formatDate(t.sentAt) : formatDate(new Date().toISOString())) }));
-    metaBlock.appendChild(el('p', { text: 'To: ' + (client?.name || '—') }));
-    metaBlock.appendChild(el('p', { text: 'Re: Work Request — ' + (wr?.title || '—') }));
-    metaBlock.appendChild(el('p', { text: 'Tracking Number: ' + t.trackingNumber, class: 'tracking-number' }));
-    letter.appendChild(metaBlock);
-
-    const intro = el('p', { text: 'Please find below the itemized list of documents being transmitted:' });
-    letter.appendChild(intro);
-
-    const itemTable = el('table', { style: 'width:100%; border-collapse:collapse; margin: var(--spacing-md) 0;' });
-    const itemThead = el('thead');
-    const itemThr = el('tr');
-    ['Document Type', 'Description'].forEach(h => {
-      const th = el('th', { text: h });
-      th.style.borderBottom = '2px solid #333';
-      th.style.textAlign = 'left';
-      th.style.padding = '8px';
-      itemThr.appendChild(th);
-    });
-    itemThead.appendChild(itemThr);
-    itemTable.appendChild(itemThead);
-
-    const itemTbody = el('tbody');
-    (t.items || []).forEach((item, idx) => {
-      const tr = el('tr');
-      [item.documentType, item.description].forEach(val => {
-        const td = el('td', { text: val });
-        td.style.borderBottom = '1px solid #ddd';
-        td.style.padding = '8px';
-        tr.appendChild(td);
-      });
-      itemTbody.appendChild(tr);
-    });
-    itemTable.appendChild(itemTbody);
-    letter.appendChild(itemTable);
-
-    const notesBlock = el('div', { style: 'margin: var(--spacing-md) 0; font-style:italic; color:var(--color-text-muted);' });
-    if (t.notes) {
-      notesBlock.appendChild(el('p', { text: 'Notes: ' + t.notes }));
+    // Date formatting (Entity-aware)
+    let formattedDate = '';
+    const dateObj = new Date(t.sentAt || t.createdAt || new Date());
+    if (entity === 'ATA') {
+      const options = { year: 'numeric', month: 'long', day: 'numeric' };
+      formattedDate = dateObj.toLocaleDateString('en-US', options).toUpperCase();
+    } else {
+      formattedDate = `${dateObj.getMonth() + 1}/${dateObj.getDate()}/${dateObj.getFullYear()}`;
     }
-    letter.appendChild(notesBlock);
 
-    const sigBlock = el('div', { style: 'margin-top: var(--spacing-xl);' });
-    sigBlock.appendChild(el('p', { text: 'Prepared by:' }));
-    sigBlock.appendChild(el('div', { style: 'height: 48px;' }));
-    sigBlock.appendChild(el('p', { text: '_______________________________', style: 'margin:0;' }));
-    sigBlock.appendChild(el('p', { text: 'Authorized Representative', style: 'margin:0; font-size:0.8125rem; color:var(--color-text-muted);' }));
-    letter.appendChild(sigBlock);
+    // TO Field parsing
+    const pocUser = DB.getById('users', client?.contactUserId);
+    const pocName = pocUser?.name || client?.contactPerson || '';
+    const clientName = client?.name || '';
+    const tradeName = client?.tradeName || '';
 
-    const ackBlock = el('div', { style: 'margin-top: var(--spacing-xl); border-top: 1px dashed var(--color-border); padding-top: var(--spacing-lg);' });
-    ackBlock.appendChild(el('p', { text: 'Received by:' }));
-    ackBlock.appendChild(el('div', { style: 'height: 48px;' }));
-    ackBlock.appendChild(el('p', { text: '_______________________________', style: 'margin:0;' }));
-    ackBlock.appendChild(el('p', { text: 'Name / Signature / Date', style: 'margin:0; font-size:0.8125rem; color:var(--color-text-muted);' }));
-    letter.appendChild(ackBlock);
+    let toLine1 = pocName || clientName || '';
+    let toLine2 = '';
+    if (tradeName) {
+      toLine2 = entity === 'ATA' ? `(${tradeName})` : tradeName;
+    } else if (pocName && clientName) {
+      toLine2 = entity === 'ATA' ? `(${clientName})` : clientName;
+    }
 
+    const address = client?.address || '';
+    let toLine3 = '';
+    let toLine4 = '';
+    if (address) {
+      const firstComma = address.indexOf(',');
+      if (firstComma !== -1) {
+        toLine3 = address.substring(0, firstComma).trim();
+        toLine4 = address.substring(firstComma + 1).trim();
+      } else {
+        toLine3 = address;
+      }
+    }
+
+    // Build the table rows for the documents
+    const rows = [];
+    const totalRows = 12;
+    let usedRows = 0;
+
+    (t.items || []).forEach(item => {
+      if (usedRows < totalRows) {
+        rows.push({ text: (item.documentType || '').toUpperCase(), isEmpty: false });
+        usedRows++;
+      }
+      if (usedRows < totalRows) {
+        rows.push({ text: (item.description || '').toUpperCase(), isEmpty: false });
+        usedRows++;
+      }
+    });
+
+    while (usedRows < totalRows) {
+      rows.push({ text: '', isEmpty: true });
+      usedRows++;
+    }
+
+    // Acknowledgment info for the signature
+    let sigName = '';
+    let sigDate = '';
+    if (t.status === 'Acknowledged' && t.receivedByName) {
+      sigName = t.receivedByName.toUpperCase();
+      if (t.acknowledgedAt) {
+        const dObj = new Date(t.acknowledgedAt);
+        sigDate = `${dObj.getMonth() + 1}/${dObj.getDate()}/${String(dObj.getFullYear()).slice(-2)}`;
+      }
+    }
+
+    const letter = el('div', { class: 'transmittal-letter', style: 'background:var(--color-surface); color:var(--color-text); font-family:Arial, sans-serif; padding:20px; border:1px solid var(--color-border); max-width:700px; margin:0 auto; box-sizing:border-box;' });
+
+    // Styles local to the preview to ensure styling matches
+    const styleEl = el('style', { textContent: `
+      .preview-container {
+        font-family: Arial, Helvetica, sans-serif;
+      }
+      .preview-header-table {
+        width: 100%;
+        border: 2px solid #000;
+        border-collapse: collapse;
+        margin-bottom: 15px;
+      }
+      .preview-header-table td {
+        border: 2px solid #000;
+        padding: 6px 10px;
+        vertical-align: top;
+      }
+      .preview-title-cell {
+        text-align: center;
+        font-weight: bold;
+        font-size: 12pt;
+        letter-spacing: 0.5px;
+        padding: 8px !important;
+      }
+      .preview-label-red {
+        color: #c2272d;
+        font-weight: bold;
+        margin-right: 5px;
+      }
+      .preview-label-bold {
+        font-weight: bold;
+        margin-right: 5px;
+      }
+      .preview-underline-line {
+        border-bottom: 1.5px solid #000;
+        min-height: 16px;
+        margin-top: 3px;
+        padding-bottom: 1px;
+        font-weight: bold;
+      }
+      .preview-document-box {
+        border: 2px solid #000;
+        position: relative;
+        margin-bottom: 15px;
+      }
+      .preview-document-title {
+        font-weight: bold;
+        padding: 6px 10px;
+        border-bottom: 2px solid #000;
+        background-color: #fff;
+        font-size: 10pt;
+      }
+      .preview-document-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .preview-doc-row {
+        height: 22px;
+      }
+      .preview-doc-cell {
+        border-bottom: 1px solid #000;
+        text-align: center;
+        font-weight: bold;
+        padding: 2px 4px;
+        font-size: 10pt;
+      }
+      .preview-document-table tr:last-child .preview-doc-cell {
+        border-bottom: none;
+      }
+      .preview-received-stamp {
+        position: absolute;
+        right: 12%;
+        top: 50%;
+        transform: translateY(-50%) rotate(-7deg);
+        border: 4px double #1e40af;
+        color: #1e40af;
+        padding: 6px 12px;
+        text-align: center;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 4px;
+        font-family: 'Courier New', Courier, monospace;
+        font-weight: bold;
+        pointer-events: none;
+        z-index: 100;
+      }
+      .preview-stamp-title {
+        font-size: 14pt;
+        letter-spacing: 2px;
+        border-bottom: 2px solid #1e40af;
+        margin-bottom: 4px;
+        padding-bottom: 1px;
+      }
+      .preview-stamp-date {
+        font-size: 11pt;
+      }
+      .preview-signature-container {
+        margin-top: 30px;
+        width: 100%;
+        max-width: 400px;
+        margin-left: auto;
+        margin-right: auto;
+        text-align: center;
+      }
+      .preview-sig-info {
+        display: flex;
+        justify-content: space-between;
+        padding: 0 20px;
+        font-weight: bold;
+        font-size: 11pt;
+        min-height: 20px;
+      }
+      .preview-sig-name {
+        flex: 2;
+        text-align: center;
+      }
+      .preview-sig-date {
+        flex: 1;
+        text-align: right;
+      }
+      .preview-sig-line {
+        border-top: 1.5px solid #000;
+        margin-top: 2px;
+      }
+      .preview-sig-label {
+        font-size: 9pt;
+        color: #333;
+        margin-top: 6px;
+      }
+    ` });
+    letter.appendChild(styleEl);
+
+    // Main layout container
+    const container = el('div', { class: 'preview-container' });
+
+    // Table Header Box
+    const headerTable = el('table', { class: 'preview-header-table' });
+    
+    // Row 1: Title
+    const r1 = el('tr');
+    r1.appendChild(el('td', { colspan: '2', class: 'preview-title-cell', text: 'DOCUMENT TRANSMITTAL FORM' }));
+    headerTable.appendChild(r1);
+
+    // Row 2: Doc No & Date
+    const r2 = el('tr');
+    const tdDocNo = el('td', { style: 'width: 55%;' }, [
+      el('span', { class: 'preview-label-red', text: 'TRANSMITTAL DOC NO.:' }),
+      el('span', { class: 'value-bold', text: t.trackingNumber })
+    ]);
+    const tdDate = el('td', { style: 'width: 45%;' }, [
+      el('span', { class: 'preview-label-bold', text: 'DATE:' }),
+      el('span', { class: 'value-bold', text: formattedDate })
+    ]);
+    r2.appendChild(tdDocNo);
+    r2.appendChild(tdDate);
+    headerTable.appendChild(r2);
+
+    // Row 3: FROM & TO
+    const r3 = el('tr');
+    const tdFrom = el('td', { style: 'width: 55%; line-height: 1.4;' }, [
+      el('strong', { text: 'FROM:' }),
+      document.createTextNode(' '),
+      el('strong', { text: fromEntity }),
+      el('br'),
+      document.createTextNode('RM 307 Republic Supermarket Bldg,'),
+      el('br'),
+      document.createTextNode('Soler St., cor. F.Torres St.,'),
+      el('br'),
+      document.createTextNode('Sta. Cruz, Manila')
+    ]);
+    const tdTo = el('td', { style: 'width: 45%;' }, [
+      el('div', { style: 'display: flex; gap: 8px; align-items: flex-start;' }, [
+        el('strong', { text: 'TO:', style: 'margin-top: 3px;' }),
+        el('div', { style: 'flex: 1; display: flex; flex-direction: column;' }, [
+          el('div', { class: 'preview-underline-line', text: toLine1 }),
+          el('div', { class: 'preview-underline-line', text: toLine2 }),
+          el('div', { class: 'preview-underline-line', text: toLine3 }),
+          el('div', { class: 'preview-underline-line', text: toLine4 })
+        ])
+      ])
+    ]);
+    r3.appendChild(tdFrom);
+    r3.appendChild(tdTo);
+    headerTable.appendChild(r3);
+
+    container.appendChild(headerTable);
+
+    // Document Box
+    const docBox = el('div', { class: 'preview-document-box' });
+    docBox.appendChild(el('div', { class: 'preview-document-title', text: 'Received the following documents and/or records:' }));
+    
+    const docTable = el('table', { class: 'preview-document-table' });
+    rows.forEach(r => {
+      const tr = el('tr', { class: 'preview-doc-row' });
+      tr.appendChild(el('td', { class: 'preview-doc-cell', html: r.isEmpty ? '&nbsp;' : r.text }));
+      docTable.appendChild(tr);
+    });
+    docBox.appendChild(docTable);
+
+    // RECEIVED STAMP (if acknowledged)
+    if (t.status === 'Acknowledged' && t.acknowledgedAt) {
+      const stampDateObj = new Date(t.acknowledgedAt);
+      const stampDateStr = stampDateObj.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+      
+      const stamp = el('div', { class: 'preview-received-stamp' }, [
+        el('div', { class: 'preview-stamp-title', text: 'RECEIVED' }),
+        el('div', { class: 'preview-stamp-date', text: stampDateStr })
+      ]);
+      docBox.appendChild(stamp);
+    }
+    container.appendChild(docBox);
+
+    // Notes (if any)
+    if (t.notes) {
+      container.appendChild(el('div', { style: 'margin: 10px 0; font-style: italic; font-size: 9.5pt; color: #555;', text: `Notes: ${t.notes}` }));
+    }
+
+    // Signature Box
+    const sigContainer = el('div', { class: 'preview-signature-container' });
+    sigContainer.appendChild(el('div', { class: 'preview-sig-info' }, [
+      el('span', { class: 'preview-sig-name', text: sigName }),
+      el('span', { class: 'preview-sig-date', text: sigDate })
+    ]));
+    sigContainer.appendChild(el('div', { class: 'preview-sig-line' }));
+    sigContainer.appendChild(el('div', { class: 'preview-sig-label', text: 'Signature over Printed name / Date Received' }));
+    container.appendChild(sigContainer);
+
+    letter.appendChild(container);
     return letter;
   },
 
@@ -735,112 +1457,315 @@ const Transmittal = {
     title.textContent = 'Transmittal — ' + t.trackingNumber;
     doc.head.appendChild(title);
 
-    const style = doc.createElement('style');
-    style.textContent = 'body { font-family: Georgia, serif; margin: 40px; color: #333; line-height: 1.6; } h2 { margin: 0 0 4px 0; font-size: 1.25rem; } .sub { font-size: 0.875rem; color: #666; margin: 0 0 24px 0; } table { width: 100%; border-collapse: collapse; margin: 16px 0; } th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; } th { border-bottom: 2px solid #333; } .tracking-number { font-family: monospace; font-size: 0.875rem; color: #666; letter-spacing: 0.05em; } .sig-space { height: 48px; } .dashed-top { border-top: 1px dashed #ccc; padding-top: 24px; margin-top: 32px; }';
-    doc.head.appendChild(style);
-
     const client = DB.getById('clients', t.clientId);
     const wr = DB.getById('workRequests', t.workRequestId);
-    const entityName = t.entity === 'ATA' ? 'ATA Accounting' : 'LTA Accounting';
+    const entity = t.entity || 'ATA';
+    const fromEntity = entity === 'ATA' ? 'ATA BUSINESS CONSULTANCY SERVICES' : 'LTA BUSINESS CONSULTANCY SERVICES';
 
-    const body = doc.body;
-
-    const h2 = doc.createElement('h2');
-    h2.textContent = entityName;
-    body.appendChild(h2);
-    const sub = doc.createElement('p');
-    sub.className = 'sub';
-    sub.textContent = 'Transmittal';
-    body.appendChild(sub);
-
-    const metaP = doc.createElement('div');
-    const pDate = doc.createElement('p');
-    pDate.textContent = 'Date: ' + (t.sentAt ? formatDate(t.sentAt) : formatDate(new Date().toISOString()));
-    metaP.appendChild(pDate);
-    const pTo = doc.createElement('p');
-    pTo.textContent = 'To: ' + (client?.name || '—');
-    metaP.appendChild(pTo);
-    const pRe = doc.createElement('p');
-    pRe.textContent = 'Re: Work Request — ' + (wr?.title || '—');
-    metaP.appendChild(pRe);
-    const pTrack = doc.createElement('p');
-    pTrack.className = 'tracking-number';
-    pTrack.textContent = 'Tracking Number: ' + t.trackingNumber;
-    metaP.appendChild(pTrack);
-    body.appendChild(metaP);
-
-    const intro = doc.createElement('p');
-    intro.textContent = 'Please find below the itemized list of documents being transmitted:';
-    body.appendChild(intro);
-
-    const table = doc.createElement('table');
-    const thead = doc.createElement('thead');
-    const thr = doc.createElement('tr');
-    ['Document Type', 'Description'].forEach(h => {
-      const th = doc.createElement('th');
-      th.textContent = h;
-      thr.appendChild(th);
-    });
-    thead.appendChild(thr);
-    table.appendChild(thead);
-
-    const tbody = doc.createElement('tbody');
-    (t.items || []).forEach((item, idx) => {
-      const tr = doc.createElement('tr');
-      [item.documentType, item.description].forEach(val => {
-        const td = doc.createElement('td');
-        td.textContent = val;
-        tr.appendChild(td);
-      });
-      tbody.appendChild(tr);
-    });
-    table.appendChild(tbody);
-    body.appendChild(table);
-
-    if (t.notes) {
-      const notes = doc.createElement('p');
-      notes.style.fontStyle = 'italic';
-      notes.style.color = '#666';
-      notes.textContent = 'Notes: ' + t.notes;
-      body.appendChild(notes);
+    // Date formatting (Entity-aware)
+    let formattedDate = '';
+    const dateObj = new Date(t.sentAt || t.createdAt || new Date());
+    if (entity === 'ATA') {
+      const options = { year: 'numeric', month: 'long', day: 'numeric' };
+      formattedDate = dateObj.toLocaleDateString('en-US', options).toUpperCase();
+    } else {
+      formattedDate = `${dateObj.getMonth() + 1}/${dateObj.getDate()}/${dateObj.getFullYear()}`;
     }
 
-    const sig = doc.createElement('div');
-    const sigP1 = doc.createElement('p');
-    sigP1.textContent = 'Prepared by:';
-    sig.appendChild(sigP1);
-    const sigSpace = doc.createElement('div');
-    sigSpace.className = 'sig-space';
-    sig.appendChild(sigSpace);
-    const sigLine = doc.createElement('p');
-    sigLine.textContent = '_______________________________';
-    sig.appendChild(sigLine);
-    const sigLabel = doc.createElement('p');
-    sigLabel.style.fontSize = '0.8125rem';
-    sigLabel.style.color = '#666';
-    sigLabel.style.margin = '0';
-    sigLabel.textContent = 'Authorized Representative';
-    sig.appendChild(sigLabel);
-    body.appendChild(sig);
+    // TO Field parsing
+    const pocUser = DB.getById('users', client?.contactUserId);
+    const pocName = pocUser?.name || client?.contactPerson || '';
+    const clientName = client?.name || '';
+    const tradeName = client?.tradeName || '';
 
-    const ack = doc.createElement('div');
-    ack.className = 'dashed-top';
-    const ackP1 = doc.createElement('p');
-    ackP1.textContent = 'Received by:';
-    ack.appendChild(ackP1);
-    const ackSpace = doc.createElement('div');
-    ackSpace.className = 'sig-space';
-    ack.appendChild(ackSpace);
-    const ackLine = doc.createElement('p');
-    ackLine.textContent = '_______________________________';
-    ack.appendChild(ackLine);
-    const ackLabel = doc.createElement('p');
-    ackLabel.style.fontSize = '0.8125rem';
-    ackLabel.style.color = '#666';
-    ackLabel.style.margin = '0';
-    ackLabel.textContent = 'Name / Signature / Date';
-    ack.appendChild(ackLabel);
-    body.appendChild(ack);
+    let toLine1 = pocName || clientName || '';
+    let toLine2 = '';
+    if (tradeName) {
+      toLine2 = entity === 'ATA' ? `(${tradeName})` : tradeName;
+    } else if (pocName && clientName) {
+      toLine2 = entity === 'ATA' ? `(${clientName})` : clientName;
+    }
+
+    const address = client?.address || '';
+    let toLine3 = '';
+    let toLine4 = '';
+    if (address) {
+      const firstComma = address.indexOf(',');
+      if (firstComma !== -1) {
+        toLine3 = address.substring(0, firstComma).trim();
+        toLine4 = address.substring(firstComma + 1).trim();
+      } else {
+        toLine3 = address;
+      }
+    }
+
+    // Build the table rows for the documents
+    const totalRows = 12;
+    let usedRows = 0;
+    let rowsHtml = '';
+
+    (t.items || []).forEach(item => {
+      if (usedRows < totalRows) {
+        rowsHtml += `<tr class="doc-row"><td class="doc-cell">${(item.documentType || '').toUpperCase()}</td></tr>`;
+        usedRows++;
+      }
+      if (usedRows < totalRows) {
+        rowsHtml += `<tr class="doc-row"><td class="doc-cell">${(item.description || '').toUpperCase()}</td></tr>`;
+        usedRows++;
+      }
+    });
+
+    while (usedRows < totalRows) {
+      rowsHtml += `<tr class="doc-row"><td class="doc-cell">&nbsp;</td></tr>`;
+      usedRows++;
+    }
+
+    // RECEIVED STAMP (if acknowledged)
+    let stampHtml = '';
+    if (t.status === 'Acknowledged' && t.acknowledgedAt) {
+      const stampDateObj = new Date(t.acknowledgedAt);
+      const stampDateStr = stampDateObj.toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase();
+      stampHtml = `
+        <div class="received-stamp">
+          <div class="stamp-title">RECEIVED</div>
+          <div class="stamp-date">${stampDateStr}</div>
+        </div>
+      `;
+    }
+
+    // Acknowledgment info for the signature
+    let sigName = '';
+    let sigDate = '';
+    if (t.status === 'Acknowledged' && t.receivedByName) {
+      sigName = t.receivedByName.toUpperCase();
+      if (t.acknowledgedAt) {
+        const dObj = new Date(t.acknowledgedAt);
+        sigDate = `${dObj.getMonth() + 1}/${dObj.getDate()}/${String(dObj.getFullYear()).slice(-2)}`;
+      }
+    }
+
+    const style = doc.createElement('style');
+    style.textContent = `
+      @page {
+        size: letter;
+        margin: 12mm 15mm;
+      }
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        margin: 0;
+        padding: 0;
+        color: #000;
+        background-color: #fff;
+        font-size: 10pt;
+        line-height: 1.35;
+      }
+      .container {
+        width: 100%;
+        max-width: 680px;
+        margin: 0 auto;
+        position: relative;
+      }
+      .header-table {
+        width: 100%;
+        border: 2px solid #000;
+        border-collapse: collapse;
+        margin-bottom: 15px;
+      }
+      .header-table td {
+        border: 2px solid #000;
+        padding: 6px 10px;
+        vertical-align: top;
+      }
+      .title-cell {
+        text-align: center;
+        font-weight: bold;
+        font-size: 12pt;
+        letter-spacing: 0.5px;
+        padding: 8px !important;
+      }
+      .doc-no-cell {
+        width: 55%;
+      }
+      .date-cell {
+        width: 45%;
+      }
+      .label-red {
+        color: #c2272d;
+        font-weight: bold;
+        margin-right: 5px;
+      }
+      .label-bold {
+        font-weight: bold;
+        margin-right: 5px;
+      }
+      .value-bold {
+        font-weight: bold;
+      }
+      .from-cell {
+        width: 55%;
+        line-height: 1.4;
+      }
+      .to-cell {
+        width: 45%;
+        line-height: 1.4;
+      }
+      .underline-line {
+        border-bottom: 1.5px solid #000;
+        min-height: 16px;
+        margin-top: 3px;
+        padding-bottom: 1px;
+        font-weight: bold;
+      }
+      .document-box {
+        border: 2px solid #000;
+        position: relative;
+        margin-bottom: 15px;
+      }
+      .document-title {
+        font-weight: bold;
+        padding: 6px 10px;
+        border-bottom: 2px solid #000;
+        background-color: #fff;
+        font-size: 10pt;
+      }
+      .document-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .doc-row {
+        height: 22px;
+      }
+      .doc-cell {
+        border-bottom: 1px solid #000;
+        text-align: center;
+        font-weight: bold;
+        padding: 2px 4px;
+        font-size: 10pt;
+      }
+      .document-table tr:last-child .doc-cell {
+        border-bottom: none;
+      }
+      .received-stamp {
+        position: absolute;
+        right: 12%;
+        top: 50%;
+        transform: translateY(-50%) rotate(-7deg);
+        border: 4px double #1e40af;
+        color: #1e40af;
+        padding: 6px 12px;
+        text-align: center;
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 4px;
+        font-family: 'Courier New', Courier, monospace;
+        font-weight: bold;
+        pointer-events: none;
+        z-index: 100;
+      }
+      .stamp-title {
+        font-size: 14pt;
+        letter-spacing: 2px;
+        border-bottom: 2px solid #1e40af;
+        margin-bottom: 4px;
+        padding-bottom: 1px;
+      }
+      .stamp-date {
+        font-size: 11pt;
+        letter-spacing: 1px;
+      }
+      .signature-container {
+        margin-top: 30px;
+        width: 100%;
+        max-width: 400px;
+        margin-left: auto;
+        margin-right: auto;
+        text-align: center;
+      }
+      .sig-info {
+        display: flex;
+        justify-content: space-between;
+        padding: 0 20px;
+        font-weight: bold;
+        font-size: 11pt;
+        min-height: 20px;
+      }
+      .sig-name {
+        flex: 2;
+        text-align: center;
+      }
+      .sig-date {
+        flex: 1;
+        text-align: right;
+      }
+      .sig-line {
+        border-top: 1.5px solid #000;
+        margin-top: 2px;
+      }
+      .sig-label {
+        font-size: 9pt;
+        color: #333;
+        margin-top: 6px;
+      }
+    `;
+    doc.head.appendChild(style);
+
+    const body = doc.body;
+    body.innerHTML = `
+      <div class="container">
+        <table class="header-table">
+          <tr>
+            <td colspan="2" class="title-cell">DOCUMENT TRANSMITTAL FORM</td>
+          </tr>
+          <tr>
+            <td class="doc-no-cell">
+              <span class="label-red">TRANSMITTAL DOC NO.:</span>
+              <span class="value-bold">${t.trackingNumber}</span>
+            </td>
+            <td class="date-cell">
+              <span class="label-bold">DATE:</span>
+              <span class="value-bold">${formattedDate}</span>
+            </td>
+          </tr>
+          <tr>
+            <td class="from-cell">
+              <strong>FROM:</strong> <strong>${fromEntity}</strong><br>
+              RM 307 Republic Supermarket Bldg,<br>
+              Soler St., cor. F.Torres St.,<br>
+              Sta. Cruz, Manila
+            </td>
+            <td class="to-cell">
+              <div style="display: flex; gap: 8px; align-items: flex-start;">
+                <strong style="margin-top: 3px;">TO:</strong>
+                <div style="flex: 1; display: flex; flex-direction: column;">
+                  <div class="underline-line">${toLine1}</div>
+                  <div class="underline-line">${toLine2}</div>
+                  <div class="underline-line">${toLine3}</div>
+                  <div class="underline-line">${toLine4}</div>
+                </div>
+              </div>
+            </td>
+          </tr>
+        </table>
+
+        <div class="document-box">
+          <div class="document-title">Received the following documents and/or records:</div>
+          <table class="document-table">
+            ${rowsHtml}
+          </table>
+          ${stampHtml}
+        </div>
+
+        ${t.notes ? `<div style="margin: 10px 0; font-style: italic; font-size: 9.5pt; color: #555;">Notes: ${t.notes}</div>` : ''}
+
+        <div class="signature-container">
+          <div class="sig-info">
+            <span class="sig-name">${sigName}</span>
+            <span class="sig-date">${sigDate}</span>
+          </div>
+          <div class="sig-line"></div>
+          <div class="sig-label">Signature over Printed name / Date Received</div>
+        </div>
+      </div>
+    `;
 
     win.focus();
     setTimeout(() => win.print(), 300);

@@ -20,8 +20,29 @@ function makeId(prefix, num) {
   return prefix + '-' + String(num).padStart(4, '0');
 }
 
+function defaultRequirementChecklist(taskId) {
+  const items = [
+    { text: 'SEC Certificate', category: 'document' },
+    { text: 'Articles of Incorporation', category: 'document' },
+    { text: "Mayor's Permit", category: 'document' },
+    { text: 'BIR Form 1901/1903', category: 'document' }
+  ];
+  return items.map((item, i) => ({
+    id: taskId + '-cl-' + String(i + 1).padStart(3, '0'),
+    text: item.text,
+    category: item.category,
+    completed: false,
+    assigneeId: null,
+    assigneeName: null,
+    dependsOn: null,
+    timeLogs: []
+  }));
+}
+
 const seedData = {
-  schemaVersion: 3,
+  schemaVersion: 4,
+  operationsRequests: [],
+
 
   users: [
     {
@@ -62,7 +83,7 @@ const seedData = {
       name: 'Accounting Staff ATA',
       email: 'accounting-ata@ata-lta.ph',
       password: 'password123',
-      role: 'Staff',
+      role: 'Accounting',
       entities: ['ata'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/4.jpg',
@@ -73,7 +94,7 @@ const seedData = {
       name: 'Accounting Staff LTA',
       email: 'accounting-lta@ata-lta.ph',
       password: 'password123',
-      role: 'Staff',
+      role: 'Accounting',
       entities: ['lta'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/men/5.jpg',
@@ -84,7 +105,7 @@ const seedData = {
       name: 'Operations Staff ATA',
       email: 'ops-ata@ata-lta.ph',
       password: 'password123',
-      role: 'Staff',
+      role: 'Operations',
       entities: ['ata'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/6.jpg',
@@ -95,7 +116,7 @@ const seedData = {
       name: 'Operations Staff LTA',
       email: 'ops-lta@ata-lta.ph',
       password: 'password123',
-      role: 'Staff',
+      role: 'Operations',
       entities: ['lta'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/men/7.jpg',
@@ -106,7 +127,7 @@ const seedData = {
       name: 'Documentation Staff',
       email: 'docs@ata-lta.ph',
       password: 'password123',
-      role: 'Staff',
+      role: 'Documentation',
       entities: ['ATA', 'LTA'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/8.jpg',
@@ -117,23 +138,18 @@ const seedData = {
       name: 'HR Staff',
       email: 'hr@ata-lta.ph',
       password: 'password123',
-      role: 'Staff',
+      role: 'HR',
       entities: ['ATA', 'LTA'],
       isActive: true,
       avatarUrl: 'https://randomuser.me/api/portraits/women/9.jpg',
       createdAt: now
-    },
-    {
-      id: makeId('u', 10),
-      name: 'Admin Staff',
-      email: 'admin-staff@ata-lta.ph',
-      password: 'password123',
-      role: 'Staff',
-      entities: ['ATA', 'LTA'],
-      isActive: true,
-      avatarUrl: 'https://randomuser.me/api/portraits/men/10.jpg',
-      createdAt: now
     }
+  ],
+
+  groundWorkers: [
+    { id: makeId('gw', 1), name: 'Juan dela Cruz' },
+    { id: makeId('gw', 2), name: 'Maria Santos' },
+    { id: makeId('gw', 3), name: 'Pedro Garcia' }
   ],
 
   clients: [
@@ -1567,23 +1583,70 @@ const seedData = {
   disbursementTemplates: []
 };
 
+// Seed derived/default fields for Phase 1.
+(function seedTaskChecklists() {
+  seedData.tasks.forEach(t => {
+    const titleLower = (t.title || '').toLowerCase();
+    if (titleLower.includes('requirement') || titleLower.includes('gather')) {
+      t.checklist = defaultRequirementChecklist(t.id);
+    } else if (!Array.isArray(t.checklist)) {
+      t.checklist = [];
+    }
+  });
+})();
+
+(function seedTaskTimeLogAttribution() {
+  const userNameById = Object.fromEntries(seedData.users.map(u => [u.id, u.name]));
+  seedData.tasks.forEach(t => {
+    if (!Array.isArray(t.timeLogs)) {
+      t.timeLogs = [];
+    }
+    t.timeLogs.forEach(log => {
+      if (!('loggedByUserId' in log) && log.userId) {
+        log.loggedByUserId = log.userId;
+      }
+      if (!('workerName' in log)) {
+        log.workerName = userNameById[log.userId || log.loggedByUserId] || t.assigneeName || 'Unknown';
+      }
+    });
+  });
+})();
+
+(function seedTaskCoAssignees() {
+  seedData.tasks.forEach(t => {
+    if (!Array.isArray(t.coAssignees)) {
+      t.coAssignees = [];
+    }
+  });
+})();
+
 // ============================================================
 // LOCALSTORAGE DB API
 // ============================================================
 
 const DB = {
-  SCHEMA_VERSION: 9,
+  SCHEMA_VERSION: 14,
+  _pendingWrIdsCache: null,
 
   init() {
     const stored = localStorage.getItem('erp_schema_version');
-    if (!stored || parseInt(stored, 10) !== this.SCHEMA_VERSION) {
-      const oldVersion = stored ? parseInt(stored, 10) : 0;
+    let oldVersion = stored ? parseInt(stored, 10) : 0;
+    if (!stored || oldVersion !== this.SCHEMA_VERSION) {
       if (oldVersion === 2) {
         this.migrateV2ToV3();
-      } else {
+        oldVersion = 3;
+      }
+      if (oldVersion > 0 && oldVersion < this.SCHEMA_VERSION) {
+        if (oldVersion < 10) this.migrateV9ToV10();
+        if (oldVersion < 11) this.migrateV10ToV11();
+        if (oldVersion < 12) this.migrateV11ToV12();
+        if (oldVersion < 13) this.migrateV12ToV13();
+        if (oldVersion < 14) this.migrateV13ToV14();
+      } else if (oldVersion === 0) {
         this.resetToSeed();
       }
     }
+    this.ensureWorkRequestBoardOrder();
   },
 
   migrateV2ToV3() {
@@ -1680,11 +1743,147 @@ const DB = {
     if (!localStorage.getItem('erp_billingTemplates')) this.save('billingTemplates', []);
     if (!localStorage.getItem('erp_disbursementTemplates')) this.save('disbursementTemplates', []);
 
+    localStorage.setItem('erp_schema_version', '3');
+  },
+
+  migrateV9ToV10() {
+    const users = this.getAll('users');
+    const userNameById = {};
+    users.forEach(u => { userNameById[u.id] = u.name; });
+
+    const tasks = this.getAll('tasks');
+    tasks.forEach(t => {
+      if (!Array.isArray(t.checklist)) {
+        t.checklist = [];
+      }
+      if (!Array.isArray(t.timeLogs)) {
+        t.timeLogs = [];
+      }
+      t.timeLogs.forEach(log => {
+        if (!('loggedByUserId' in log) && log.userId) {
+          log.loggedByUserId = log.userId;
+        }
+        if (!('workerName' in log)) {
+          log.workerName = userNameById[log.userId || log.loggedByUserId] || t.assigneeName || 'Unknown';
+        }
+      });
+    });
+    this.save('tasks', tasks);
+
+    if (!localStorage.getItem('erp_groundWorkers')) {
+      this.save('groundWorkers', seedData.groundWorkers || []);
+    }
+
+    localStorage.setItem('erp_schema_version', '10');
+  },
+
+  migrateV10ToV11() {
+    const tasks = this.getAll('tasks');
+    tasks.forEach(t => {
+      if (!Array.isArray(t.checklist)) {
+        t.checklist = [];
+      }
+      t.checklist = t.checklist.map(item => {
+        if (typeof item === 'string') {
+          return { id: generateId('chk'), text: item, category: 'subtask', completed: false, assigneeId: null, assigneeName: null };
+        }
+        return {
+          id: item.id || generateId('chk'),
+          text: item.text || '',
+          category: item.category || 'subtask',
+          completed: !!item.completed,
+          assigneeId: item.assigneeId || null,
+          assigneeName: item.assigneeName || null
+        };
+      });
+    });
+    this.save('tasks', tasks);
+
     localStorage.setItem('erp_schema_version', String(this.SCHEMA_VERSION));
   },
 
+  migrateV11ToV12() {
+    const tasks = this.getAll('tasks');
+    tasks.forEach(t => {
+      if (!Array.isArray(t.timeLogs)) {
+        t.timeLogs = [];
+      }
+      if (!Array.isArray(t.checklist)) {
+        t.checklist = [];
+      }
+      if (!Array.isArray(t.coAssignees)) {
+        t.coAssignees = [];
+      }
+      t.checklist.forEach(item => {
+        if (!item.id) item.id = generateId('chk');
+        item.dependsOn = item.dependsOn || null;
+        item.timeLogs = item.timeLogs || [];
+      });
+    });
+    this.save('tasks', tasks);
+
+    localStorage.setItem('erp_schema_version', '12');
+  },
+
+  migrateV12ToV13() {
+    if (!localStorage.getItem('erp_operationsRequests')) {
+      this.save('operationsRequests', []);
+    }
+    localStorage.setItem('erp_schema_version', '13');
+  },
+
+  migrateV13ToV14() {
+    this.ensureWorkRequestBoardOrder();
+    localStorage.setItem('erp_schema_version', '14');
+  },
+
+  ensureWorkRequestBoardOrder() {
+    const wrs = this.getAll('workRequests');
+    const hasMissing = wrs.some(wr => typeof wr.boardOrder !== 'number');
+    if (!hasMissing) return;
+    const sorted = [...wrs].sort((a, b) => {
+      const ta = new Date(a.createdAt || 0).getTime();
+      const tb = new Date(b.createdAt || 0).getTime();
+      if (ta !== tb) return ta - tb;
+      return String(a.id).localeCompare(String(b.id));
+    });
+    const orderById = new Map();
+    sorted.forEach((wr, i) => { orderById.set(wr.id, (i + 1) * 1000); });
+    const updated = wrs.map(wr => {
+      const clean = { ...wr };
+      delete clean.isPendingApproval;
+      if (typeof clean.boardOrder !== 'number') {
+        clean.boardOrder = orderById.get(wr.id);
+      }
+      return clean;
+    });
+    this.save('workRequests', updated);
+  },
+
   getAll(table) {
-    return JSON.parse(localStorage.getItem('erp_' + table) || '[]');
+    let records = JSON.parse(localStorage.getItem('erp_' + table) || '[]');
+    if (table === 'workRequests' && records.length > 0) {
+      records = records.map(r => ({ ...r }));
+      if (!this._pendingWrIdsCache) {
+        const pcStr = localStorage.getItem('erp_pendingChanges') || '[]';
+        try {
+          const pcs = JSON.parse(pcStr);
+          this._pendingWrIdsCache = new Set(
+            pcs.filter(pc => pc.status === 'pending' && pc.table === 'workRequests' && pc.proposedData)
+               .map(pc => pc.proposedData.id || pc.proposedData.key || pc.proposedData.workRequestId)
+               .filter(Boolean)
+          );
+        } catch (e) {
+          this._pendingWrIdsCache = new Set();
+        }
+      }
+      records.forEach(r => {
+        if (this._pendingWrIdsCache.has(r.id)) {
+          r.isPendingApproval = true;
+        }
+      });
+    }
+    return records;
   },
 
   getById(table, id) {
@@ -1700,21 +1899,35 @@ const DB = {
   },
 
   insert(table, record) {
+    this._pendingWrIdsCache = null;
     const all = this.getAll(table);
-    all.push(record);
+    const cleanRecord = { ...record };
+    if (table === 'workRequests') {
+      delete cleanRecord.isPendingApproval;
+    }
+    all.push(cleanRecord);
     this.save(table, all);
   },
 
   update(table, id, changes) {
+    this._pendingWrIdsCache = null;
     const all = this.getAll(table);
     const idx = all.findIndex(r => r.id === id);
     if (idx !== -1) {
-      all[idx] = { ...all[idx], ...changes };
+      const cleanChanges = { ...changes };
+      if (table === 'workRequests') {
+        delete cleanChanges.isPendingApproval;
+      }
+      all[idx] = { ...all[idx], ...cleanChanges };
+      if (table === 'workRequests') {
+        delete all[idx].isPendingApproval;
+      }
       this.save(table, all);
     }
   },
 
   delete(table, id) {
+    this._pendingWrIdsCache = null;
     const all = this.getAll(table).filter(r => r.id !== id);
     this.save(table, all);
   },

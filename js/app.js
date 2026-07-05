@@ -6,12 +6,65 @@
 const App = {
   currentModule: null,
 
+  /**
+   * Theme management: manual toggle with OS preference fallback.
+   * Persists the user's choice in localStorage so it survives reloads.
+   */
+  initTheme() {
+    if (this._themeInited) return;
+    this._themeInited = true;
+
+    const apply = () => {
+      const stored = localStorage.getItem('erp_theme');
+      let theme = stored;
+      if (!theme && window.matchMedia) {
+        theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      this.applyTheme(theme || 'light');
+    };
+
+    apply();
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+        if (!localStorage.getItem('erp_theme')) apply();
+      });
+    }
+  },
+
+  applyTheme(theme) {
+    const isDark = theme === 'dark';
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    const moon = document.getElementById('theme-icon-moon');
+    const sun = document.getElementById('theme-icon-sun');
+    if (moon && sun) {
+      moon.classList.toggle('hidden', isDark);
+      sun.classList.toggle('hidden', !isDark);
+    }
+  },
+
+  toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    const next = current === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('erp_theme', next);
+    this.applyTheme(next);
+  },
+
+  setupThemeToggle() {
+    if (this._themeToggleWired) return;
+    this._themeToggleWired = true;
+    const btn = document.getElementById('theme-toggle-btn');
+    if (btn) btn.addEventListener('click', () => this.toggleTheme());
+  },
+
   init() {
     if (!Auth.restoreSession()) return;
+    this.initTheme();
+    this.setupThemeToggle();
     this.renderShell();
     this.setupRouting();
     this.setupNavigation();
     this.setupResponsiveMenu();
+    this.setupSidebarCollapse();
     this.setupLogout();
     
     // Default route is dashboard for all users
@@ -23,19 +76,75 @@ const App = {
     
     this.handleRoute();
     this.updateSidebarNotifications();
+    this.setupStickyTrayResize();
+
+
+    // Close split button dropdown menus when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.split-btn-group')) {
+        document.querySelectorAll('.split-btn-menu').forEach(menu => {
+          menu.classList.add('hidden');
+        });
+      }
+    });
+
+    window.addEventListener('resize', () => this.updateStickyOffsets());
+    window.addEventListener('scroll', () => this.updateStickyOffsets());
+    window.addEventListener('load', () => this.updateStickyOffsets());
+  },
+
+  updateStickyTrayOffset() {
+    const content = document.getElementById('content');
+    if (!content) return;
+    const tray = content.querySelector('.filters-bar, .task-view-toolbar');
+
+    const setHeight = (el) => {
+      const height = el ? el.getBoundingClientRect().height : 0;
+      content.style.setProperty('--sticky-tray-height', `${height}px`);
+    };
+
+    if (typeof ResizeObserver !== 'undefined') {
+      if (!this._trayObserver) {
+        this._trayObserver = new ResizeObserver((entries) => {
+          for (const entry of entries) setHeight(entry.target);
+        });
+      }
+      if (this._trayTarget && this._trayTarget !== tray) {
+        this._trayObserver.unobserve(this._trayTarget);
+      }
+      if (tray) {
+        this._trayObserver.observe(tray);
+        this._trayTarget = tray;
+      } else {
+        this._trayTarget = null;
+      }
+    }
+
+    setHeight(tray);
+  },
+
+  setupStickyTrayResize() {
+    let raf = 0;
+    window.addEventListener('resize', () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => this.updateStickyTrayOffset());
+    });
   },
 
   updateSidebarNotifications() {
-    const role = Auth.user.role;
-    const isAdmin = role === 'Admin';
+    const canApprove = Auth.can('disbursement:approve');
     const entity = Auth.activeEntity;
 
     const items = DB.getWhere('disbursements', d => d.entity === entity);
     let count = 0;
 
     items.forEach(d => {
-      // Admin sees count of submissions awaiting their approval
-      if (isAdmin && (d.status === 'Submitted' || d.status === 'Under Review')) {
+      // Admin sees count of submissions awaiting approval
+      if (canApprove && (d.status === 'Submitted' || d.status === 'Under Review')) {
+        count++;
+      }
+      // Admin also sees count of Manager release requests pending approval
+      if (canApprove && d.status === 'Release Pending Approval') {
         count++;
       }
       // Handlers see count of disbursements awaiting their final release
@@ -60,11 +169,11 @@ const App = {
     }
 
     // Also badge the Admin nav link for pending changes and disbursement submissions
-    if (isAdmin) {
+    if (canApprove) {
       const pendingChanges = (typeof PendingChanges !== 'undefined' && typeof PendingChanges.getAllPending === 'function') ? PendingChanges.getAllPending() : [];
       const adminCount = count + pendingChanges.length;
       const adminNav = document.querySelector('nav a[href="#admin"]');
-      if (adminNav) {
+      if (adminNav && Auth.user?.role !== 'Manager') {
         let adminBadge = adminNav.querySelector('.nav-badge');
         if (adminCount > 0) {
           if (!adminBadge) {
@@ -76,6 +185,67 @@ const App = {
         } else if (adminBadge) {
           adminBadge.remove();
         }
+      }
+    } else {
+      // Staff-level: badge count of user's own pending changes, rejected changes, and pending requests
+      const pendingChanges = (typeof PendingChanges !== 'undefined' && typeof PendingChanges.getPendingForUser === 'function') ? PendingChanges.getPendingForUser(Auth.user.id) : [];
+      const rejectedChanges = (typeof PendingChanges !== 'undefined' && typeof PendingChanges.getRejectedForUser === 'function') ? PendingChanges.getRejectedForUser(Auth.user.id) : [];
+      const myReqs = (typeof DB !== 'undefined' && typeof DB.getWhere === 'function') ? DB.getWhere('operationsRequests', r => r.requestedBy === Auth.user.id && r.status === 'pending') : [];
+      const staffCount = pendingChanges.length + rejectedChanges.length + myReqs.length;
+      const adminNav = document.querySelector('nav a[href="#admin"]');
+      if (adminNav && Auth.user?.role !== 'Manager') {
+        let adminBadge = adminNav.querySelector('.nav-badge');
+        if (staffCount > 0) {
+          if (!adminBadge) {
+            adminBadge = document.createElement('span');
+            adminBadge.className = 'nav-badge';
+            adminNav.appendChild(adminBadge);
+          }
+          adminBadge.textContent = staffCount > 99 ? '99+' : staffCount;
+        } else if (adminBadge) {
+          adminBadge.remove();
+        }
+      }
+    }
+
+    // Badge Billing nav for pending billing operations requests
+    const billingReqRole = Auth.user?.role;
+    if (billingReqRole === 'Accounting' || billingReqRole === 'Admin' || billingReqRole === 'Manager') {
+      const billingReqs = DB.getWhere('operationsRequests', r => r.status === 'pending' && r.type === 'billing');
+      const billingNav = document.querySelector('nav a[href="#billing"]');
+      if (billingNav) {
+        let bBadge = billingNav.querySelector('.nav-badge');
+        if (billingReqs.length > 0) {
+          if (!bBadge) { bBadge = document.createElement('span'); bBadge.className = 'nav-badge'; billingNav.appendChild(bBadge); }
+          bBadge.textContent = billingReqs.length > 99 ? '99+' : billingReqs.length;
+        } else if (bBadge) { bBadge.remove(); }
+      }
+    }
+
+    // Badge Disbursement nav for pending disbursement operations requests
+    if (billingReqRole === 'Accounting' || billingReqRole === 'Admin' || billingReqRole === 'Manager') {
+      const disbReqs = DB.getWhere('operationsRequests', r => r.status === 'pending' && r.type === 'disbursement');
+      const disbNav = document.querySelector('nav a[href="#disbursement"]');
+      if (disbNav) {
+        let dBadge = disbNav.querySelector('.nav-badge');
+        if (disbReqs.length > 0) {
+          if (!dBadge) { dBadge = document.createElement('span'); dBadge.className = 'nav-badge'; disbNav.appendChild(dBadge); }
+          dBadge.textContent = disbReqs.length > 99 ? '99+' : disbReqs.length;
+        } else if (dBadge) { dBadge.remove(); }
+      }
+    }
+
+    // Badge Transmittal nav for pending transmittal operations requests
+    // Only Documentation and Admin can fulfill transmittal requests, so only they see the badge.
+    if (billingReqRole === 'Documentation' || billingReqRole === 'Admin') {
+      const transReqs = DB.getWhere('operationsRequests', r => r.status === 'pending' && r.type === 'transmittal');
+      const transNav = document.querySelector('nav a[href="#transmittal"]');
+      if (transNav) {
+        let tBadge = transNav.querySelector('.nav-badge');
+        if (transReqs.length > 0) {
+          if (!tBadge) { tBadge = document.createElement('span'); tBadge.className = 'nav-badge'; transNav.appendChild(tBadge); }
+          tBadge.textContent = transReqs.length > 99 ? '99+' : transReqs.length;
+        } else if (tBadge) { tBadge.remove(); }
       }
     }
   },
@@ -95,17 +265,42 @@ const App = {
     }
     this.renderEntitySwitcher();
 
-    // Hide Admin nav link for non-Admin users
+    // Configure Admin / My Submissions nav link dynamically based on role/permissions
     const adminNav = document.querySelector('nav a[href="#admin"]');
     if (adminNav) {
-      adminNav.parentElement.style.display = Auth.user.role === 'Admin' ? '' : 'none';
+      const canManageUsers = Auth.can('users:view');
+      const labelEl = adminNav.querySelector('.nav-link-text');
+      if (Auth.user.role === 'Manager') {
+        adminNav.parentElement.style.display = 'none';
+      } else if (canManageUsers) {
+        adminNav.parentElement.style.display = '';
+        if (labelEl) labelEl.textContent = 'Admin';
+      } else {
+        // Staff-level user: show as "My Submissions"
+        adminNav.parentElement.style.display = '';
+        if (labelEl) labelEl.textContent = 'My Submissions';
+      }
     }
 
     // Hide Reports nav link for non-Managerial users
     const reportsNav = document.querySelector('nav a[href="#reports"]');
     if (reportsNav) {
-      const isManagerial = Auth.user.role === 'Admin' || Auth.user.role === 'Manager';
-      reportsNav.parentElement.style.display = isManagerial ? '' : 'none';
+      const canViewReports = Auth.can('reports:view');
+      reportsNav.parentElement.style.display = canViewReports ? '' : 'none';
+    }
+
+    // Hide Disbursement nav link for users without disbursement:view permission
+    const disbNav = document.querySelector('nav a[href="#disbursement"]');
+    if (disbNav) {
+      const canViewDisbursement = Auth.can('disbursement:view');
+      disbNav.parentElement.style.display = canViewDisbursement ? '' : 'none';
+    }
+
+    // Hide Transmittal nav link for users without any transmittal permissions
+    const transmittalNav = document.querySelector('nav a[href="#transmittal"]');
+    if (transmittalNav) {
+      const canViewTransmittal = Auth.can('transmittal:view') || Auth.can('transmittal:request');
+      transmittalNav.parentElement.style.display = canViewTransmittal ? '' : 'none';
     }
   },
 
@@ -113,7 +308,7 @@ const App = {
     const sel = document.getElementById('entity-switcher');
     sel.innerHTML = '';
     
-    if (Auth.user.entities.length > 1 && (Auth.user.role === 'Admin' || Auth.user.role === 'Manager')) {
+    if (Auth.user.entities.length > 1 && Auth.isManagerial()) {
       const opt = document.createElement('option');
       opt.value = 'ALL';
       opt.textContent = 'Consolidated View';
@@ -132,7 +327,37 @@ const App = {
     sel.onchange = (ev) => {
       Auth.switchEntity(ev.target.value);
       this.updateEntityBadge();
-      this.handleRoute();
+      
+      // Clean up module states for any detail/form view
+      if (typeof Workflow !== 'undefined') {
+        Workflow.view = 'list';
+        Workflow.detailWrId = null;
+        Workflow.editingId = null;
+      }
+      if (typeof Billing !== 'undefined') {
+        Billing.view = 'list';
+        Billing.detailId = null;
+      }
+      if (typeof Disbursement !== 'undefined') {
+        Disbursement.view = 'list';
+        Disbursement.detailId = null;
+      }
+      if (typeof Transmittal !== 'undefined') {
+        Transmittal.view = 'list';
+        Transmittal.detailId = null;
+      }
+      if (typeof Clients !== 'undefined') {
+        Clients.editingId = null;
+      }
+
+      // If the current route has subpaths (e.g. #billing/detail/123), reset to the base route (e.g. #billing)
+      const rawHash = location.hash || '#dashboard';
+      const baseHash = rawHash.split('?')[0].split('/')[0];
+      if (location.hash !== baseHash) {
+        location.hash = baseHash;
+      }
+
+      triggerSyncReload(baseHash);
     };
   },
 
@@ -153,7 +378,21 @@ const App = {
     document.querySelectorAll('nav a[data-module]').forEach(link => {
       link.addEventListener('click', (e) => {
         e.preventDefault();
-        location.hash = link.getAttribute('href');
+        const href = link.getAttribute('href');
+        // Reset module view to 'list' when clicking a nav link directly
+        const moduleViewMap = {
+          '#operations': () => { Workflow.view = 'list'; Workflow.detailWrId = null; Workflow.editingId = null; },
+          '#billing': () => { Billing.view = 'list'; Billing.detailId = null; },
+          '#disbursement': () => { Disbursement.view = 'list'; Disbursement.detailId = null; },
+          '#transmittal': () => { if (typeof Transmittal !== 'undefined') { Transmittal.view = 'list'; Transmittal.detailId = null; } }
+        };
+        if (moduleViewMap[href]) moduleViewMap[href]();
+        if (location.hash === href) {
+          // Hash won't change, so hashchange won't fire — call handleRoute manually
+          this.handleRoute();
+        } else {
+          location.hash = href;
+        }
       });
     });
   },
@@ -177,6 +416,25 @@ const App = {
     });
   },
 
+  setupSidebarCollapse() {
+    const sidebar = document.getElementById('sidebar');
+    const btn = document.getElementById('sidebar-collapse-btn');
+    if (!sidebar || !btn) return;
+
+    // Restore persisted state
+    if (localStorage.getItem('erp_sidebar_collapsed') === 'true') {
+      sidebar.classList.add('collapsed');
+      btn.title = 'Expand sidebar';
+    }
+
+    btn.addEventListener('click', () => {
+      sidebar.classList.toggle('collapsed');
+      const isCollapsed = sidebar.classList.contains('collapsed');
+      btn.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+      localStorage.setItem('erp_sidebar_collapsed', isCollapsed);
+    });
+  },
+
   setupLogout() {
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {
@@ -193,7 +451,74 @@ const App = {
   },
 
   handleRoute() {
-    const hash = location.hash || '#dashboard';
+    if (window.SidePaneInstance) window.SidePaneInstance.close();
+    const rawHash = location.hash || '#dashboard';
+    const parts = rawHash.split('?');
+    const pathParts = parts[0].split('/');
+    const baseHash = pathParts[0];
+
+    // Auto-update module view state from route detail/form paths
+    // Only override module views when the URL explicitly specifies a sub-path (detail/form).
+    // When there's no sub-path, only reset to 'list' if the current view is a URL-driven
+    // view (detail/form) — this preserves internal module views like 'templates', 'archive',
+    // 'aging', 'trash', 'report', 'templateForm' that buttons set before calling handleRoute().
+    //
+    // Note on full-page form routes:
+    // #module/form/new and #module/form/:id are now implemented for operations, billing,
+    // disbursement, transmittal, clients, and retainer templates. These routes render the
+    // form inline in the main content area (PaneMode.FULL_PAGE behavior) and set the module
+    // editing state so that module.render() can display the form directly.
+    if (baseHash === '#operations') {
+      if (pathParts[1] === 'detail' && pathParts[2]) {
+        Workflow.view = 'detail';
+        Workflow.detailWrId = pathParts[2];
+      } else if (pathParts[1] === 'form') {
+        Workflow.view = 'form';
+        Workflow.editingId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+      } else if (pathParts[1] === 'templateForm') {
+        Workflow.view = 'templateForm';
+        Workflow.templateEditingId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+      } else if (!Workflow.view || Workflow.view === 'detail' || Workflow.view === 'form' || Workflow.view === 'templateForm') {
+        Workflow.view = 'list';
+        Workflow.detailWrId = null;
+        Workflow.editingId = null;
+        Workflow.templateEditingId = null;
+      }
+    } else if (baseHash === '#billing') {
+      if (pathParts[1] === 'detail' && pathParts[2]) {
+        Billing.view = 'detail';
+        Billing.detailId = pathParts[2];
+      } else if (pathParts[1] === 'form') {
+        Billing.view = 'form';
+        Billing.detailId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+      } else if (!Billing.view || Billing.view === 'detail' || Billing.view === 'form') {
+        Billing.view = 'list';
+        Billing.detailId = null;
+      }
+    } else if (baseHash === '#disbursement') {
+      if (pathParts[1] === 'detail' && pathParts[2]) {
+        Disbursement.view = 'detail';
+        Disbursement.detailId = pathParts[2];
+      } else if (pathParts[1] === 'form') {
+        Disbursement.view = 'form';
+        Disbursement.detailId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+      } else if (!Disbursement.view || Disbursement.view === 'detail' || Disbursement.view === 'form') {
+        Disbursement.view = 'list';
+        Disbursement.detailId = null;
+      }
+    } else if (baseHash === '#transmittal') {
+      if (pathParts[1] === 'detail' && pathParts[2]) {
+        Transmittal.view = 'detail';
+        Transmittal.detailId = pathParts[2];
+      } else if (pathParts[1] === 'form') {
+        Transmittal.view = 'form';
+        Transmittal.detailId = (pathParts[2] && pathParts[2] !== 'new') ? pathParts[2] : null;
+      } else if (!Transmittal.view || Transmittal.view === 'detail' || Transmittal.view === 'form') {
+        Transmittal.view = 'list';
+        Transmittal.detailId = null;
+      }
+    }
+
     const moduleMap = {
       '#dashboard': Dashboard,
       '#clients': Clients,
@@ -206,16 +531,25 @@ const App = {
     };
 
     // RBAC: Restricted modules
-    if (hash === '#reports' && (Auth.user.role !== 'Admin' && Auth.user.role !== 'Manager')) {
+    if (baseHash === '#reports' && !Auth.can('reports:view')) {
        location.hash = '#dashboard';
        return;
     }
-    if (hash === '#admin' && Auth.user.role !== 'Admin') {
+    if (baseHash === '#disbursement' && !Auth.can('disbursement:view')) {
+       location.hash = '#dashboard';
+       return;
+    }
+    if (baseHash === '#transmittal' && !Auth.can('transmittal:view') && !Auth.can('transmittal:request')) {
+       location.hash = '#dashboard';
+       return;
+    }
+    if (baseHash === '#admin' && Auth.user.role === 'Manager') {
        location.hash = '#dashboard';
        return;
     }
 
-    const module = moduleMap[hash];
+    const module = moduleMap[baseHash];
+    this.currentModule = baseHash.replace('#', '');
     const content = document.getElementById('content');
 
     if (module && module.render) {
@@ -227,15 +561,17 @@ const App = {
         content.appendChild(rendered);
       }
       if (module.init) module.init();
-      this.highlightNav(hash);
+      this.highlightNav(rawHash);
       this.updateEntityBadge();
       this.updateSidebarNotifications();
+      requestAnimationFrame(() => this.updateStickyTrayOffset());
     }
   },
 
   highlightNav(hash) {
+    const baseHash = hash.split('?')[0].split('/')[0];
     document.querySelectorAll('nav a').forEach(a => {
-      a.classList.toggle('active', a.getAttribute('href') === hash);
+      a.classList.toggle('active', a.getAttribute('href') === baseHash);
     });
   },
 
@@ -254,11 +590,79 @@ const App = {
     if (mode === 'list' || mode === 'table' || mode === 'board') {
       localStorage.setItem(key, mode);
     }
+  },
+
+  saveFilters(module, filterMap) {
+    const key = `erp_filters_${module}`;
+    try { sessionStorage.setItem(key, JSON.stringify(filterMap)); } catch (e) { /* ignore */ }
+  },
+
+  restoreFilters(module) {
+    const key = `erp_filters_${module}`;
+    try {
+      const stored = sessionStorage.getItem(key);
+      return stored ? JSON.parse(stored) : null;
+    } catch (e) { return null; }
+  },
+
+  clearSavedFilters(module) {
+    const key = `erp_filters_${module}`;
+    try { sessionStorage.removeItem(key); } catch (e) { /* ignore */ }
+  },
+
+  updateStickyOffsets() {
+    const activeModule = this.currentModule;
+    if (!activeModule) return;
+
+    const container = document.getElementById('content');
+    if (!container) return;
+
+    // 1. Generic page elements
+    const titleBar = container.querySelector('.page-title-bar-v2');
+    let titleBarHeight = 48;
+    if (titleBar) {
+      titleBarHeight = titleBar.getBoundingClientRect().height - 20;
+    }
+
+    const tabNav = container.querySelector('.module-tab-nav');
+    let tabNavHeight = 45;
+    if (tabNav) {
+      tabNavHeight = tabNav.getBoundingClientRect().height;
+    }
+
+    // Set scoped CSS custom variables on the content container
+    container.style.setProperty(`--${activeModule}-title-bar-height`, `${titleBarHeight}px`);
+    container.style.setProperty(`--${activeModule}-tab-nav-height`, `${tabNavHeight}px`);
+
+    const toolbar = container.querySelector(`.${activeModule}-tab-page .toolbar-sticky-container`);
+    let toolbarHeight = 0;
+    if (toolbar) {
+      toolbarHeight = toolbar.getBoundingClientRect().height;
+    }
+    container.style.setProperty(`--${activeModule}-toolbar-height`, `${toolbarHeight}px`);
+
+    // 2. Specific detail views
+    const detailTitleBar = container.querySelector('.project-detail-v2 .page-title-bar-v2');
+    let detailTitleBarHeight = 48;
+    if (detailTitleBar) {
+      detailTitleBarHeight = detailTitleBar.getBoundingClientRect().height - 20;
+    }
+    container.style.setProperty('--project-detail-title-bar-height', `${detailTitleBarHeight}px`);
+
+    const detailToolbar = container.querySelector('.project-detail-v2 .task-view-toolbar');
+    let detailToolbarHeight = 40;
+    if (detailToolbar) {
+      detailToolbarHeight = detailToolbar.getBoundingClientRect().height;
+    }
+    container.style.setProperty('--project-detail-toolbar-height', `${detailToolbarHeight}px`);
   }
 };
 
 // Login form wiring
 document.addEventListener('DOMContentLoaded', () => {
+  App.initTheme();
+  App.setupThemeToggle();
+
   const loginForm = document.getElementById('login-form');
   if (loginForm) {
     loginForm.addEventListener('submit', (e) => {
@@ -281,9 +685,56 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  if (Auth.restoreSession()) {
+  const hasSession = Auth.restoreSession();
+  const loadingScreen = document.getElementById('loading-screen');
+
+  if (hasSession) {
     document.getElementById('login-screen').classList.add('hidden');
     document.getElementById('app-shell').classList.remove('hidden');
     App.init();
+  } else {
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('app-shell').classList.add('hidden');
+    sessionStorage.removeItem('is_syncing');
+    sessionStorage.removeItem('pending_toast');
+    document.documentElement.classList.remove('loading-active');
   }
+
+  // Clear the show timeout to prevent it from firing if the page loaded fast
+  if (window.LoadingManager && typeof window.LoadingManager.clear === 'function') {
+    window.LoadingManager.clear();
+  }
+
+  const showPendingToast = () => {
+    const pendingToast = sessionStorage.getItem('pending_toast');
+    if (pendingToast) {
+      sessionStorage.removeItem('pending_toast');
+      try {
+        const { title, message, type } = JSON.parse(pendingToast);
+        if (typeof Workflow !== 'undefined' && typeof Workflow.showMessage === 'function') {
+          Workflow.showMessage(title, message, type);
+        }
+      } catch (e) {
+        console.error('Error parsing pending toast:', e);
+      }
+    }
+  };
+
+  // Handle fading out of loading screen if active
+  if (document.documentElement.classList.contains('loading-active') && loadingScreen) {
+    // Rely entirely on the CSS transition timing function by only toggling the opacity property
+    loadingScreen.style.opacity = '0';
+    setTimeout(() => {
+      document.documentElement.classList.remove('loading-active');
+      loadingScreen.classList.add('hidden');
+      loadingScreen.style.opacity = '';
+      showPendingToast(); // Show modal only after loading screen is completely faded out
+    }, window.LoadingManager ? window.LoadingManager.TRANSITION_MS : 250);
+  } else {
+    if (loadingScreen) loadingScreen.classList.add('hidden');
+    showPendingToast(); // Show modal immediately if loading screen was not active
+  }
+  
+  // Always ensure is_syncing is cleared after routing and initialization
+  sessionStorage.removeItem('is_syncing');
 });

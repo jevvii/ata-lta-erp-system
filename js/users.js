@@ -16,36 +16,39 @@ const Users = {
     container.appendChild(titleBar);
     this.updateBreadcrumb(h1);
 
-    const isAdmin = Auth.user.role === 'Admin';
+    const canManageUsers = Auth.can('users:view');
 
     // Tabs
     const tabs = el('div', { class: 'admin-tabs' });
     tabs.style.marginBottom = '20px'; // align layout nicely below breadcrumb
 
-    if (isAdmin) {
+    if (canManageUsers) {
       const usersTab = el('button', {
-        class: 'btn ' + (this.view === 'users' ? 'btn-primary' : 'btn-ghost'),
+        class: 'btn ' + (this.view === 'users' ? 'btn-primary' : 'btn-secondary'),
         text: 'Users'
       });
       usersTab.addEventListener('click', () => { this.view = 'users'; this.editingId = null; this.pendingDetailId = null; App.handleRoute(); });
       tabs.appendChild(usersTab);
     }
 
-    const auditTab = el('button', {
-      class: 'btn ' + (this.view === 'audit' ? 'btn-primary' : 'btn-ghost'),
-      text: 'Audit Log'
-    });
-    auditTab.addEventListener('click', () => { this.view = 'audit'; this.editingId = null; this.pendingDetailId = null; App.handleRoute(); });
-    tabs.appendChild(auditTab);
+    if (canManageUsers) {
+      const auditTab = el('button', {
+        class: 'btn ' + (this.view === 'audit' ? 'btn-primary' : 'btn-secondary'),
+        text: 'Audit Log'
+      });
+      auditTab.addEventListener('click', () => { this.view = 'audit'; this.editingId = null; this.pendingDetailId = null; App.handleRoute(); });
+      tabs.appendChild(auditTab);
+    }
 
-    if (isAdmin) {
+    if (canManageUsers) {
       const entity = Auth.activeEntity;
       const pendingDisbursements = DB.getWhere('disbursements', d => d.entity === entity && (d.status === 'Submitted' || d.status === 'Under Review'));
-      const pendingChanges = PendingChanges.getAllPending();
+      let pendingChanges = PendingChanges.getAllPending();
+      pendingChanges = pendingChanges.filter(pc => PendingChanges.canApproveChange(pc));
       const totalPending = pendingDisbursements.length + pendingChanges.length;
 
       const pendingTab = el('button', {
-        class: 'btn ' + (this.view === 'pending' ? 'btn-primary' : 'btn-ghost'),
+        class: 'btn ' + (this.view === 'pending' ? 'btn-primary' : 'btn-secondary'),
         text: 'Pending Approvals'
       });
       if (totalPending > 0) {
@@ -55,27 +58,49 @@ const Users = {
       pendingTab.addEventListener('click', () => { this.view = 'pending'; this.editingId = null; this.pendingDetailId = null; App.handleRoute(); });
       tabs.appendChild(pendingTab);
     } else {
+      const isOperations = Auth.user.role === 'Operations';
+      
       const myPendingTab = el('button', {
-        class: 'btn ' + (this.view === 'myPending' ? 'btn-primary' : 'btn-ghost'),
+        class: 'btn ' + (this.view === 'myPending' ? 'btn-primary' : 'btn-secondary'),
         text: 'My Pending Submissions'
       });
       myPendingTab.addEventListener('click', () => { this.view = 'myPending'; this.editingId = null; this.pendingDetailId = null; App.handleRoute(); });
       tabs.appendChild(myPendingTab);
+      
+      const myRequestsTab = el('button', {
+        class: 'btn ' + (this.view === 'myRequests' ? 'btn-primary' : 'btn-secondary'),
+        text: 'My Requests'
+      });
+      myRequestsTab.addEventListener('click', () => { this.view = 'myRequests'; this.editingId = null; this.pendingDetailId = null; App.handleRoute(); });
+      tabs.appendChild(myRequestsTab);
+
+      const validStaffViews = ['myRequests', 'myPending'];
+      if (!validStaffViews.includes(this.view)) {
+        this.view = isOperations ? 'myRequests' : 'myPending';
+      }
     }
 
     container.appendChild(tabs);
 
-    if (this.view === 'users' && isAdmin) {
+    if (this.view === 'users' && canManageUsers) {
       container.appendChild(this.renderUsersSection());
-    } else if (this.view === 'audit') {
+    } else if (this.view === 'audit' && canManageUsers) {
       container.appendChild(this.renderAuditSection());
-    } else if (this.view === 'pending' && isAdmin) {
+    } else if (this.view === 'pending' && canManageUsers) {
       container.appendChild(this.renderPendingSection());
-    } else if (this.view === 'myPending' && !isAdmin) {
+    } else if (this.view === 'myPending' && !canManageUsers) {
       container.appendChild(this.renderMyPendingSection());
-    } else if (!isAdmin) {
-      this.view = 'myPending';
-      container.appendChild(this.renderMyPendingSection());
+    } else if (this.view === 'myRequests' && !canManageUsers) {
+      container.appendChild(this.renderMyRequestsSection());
+    } else if (!canManageUsers) {
+      if (!['myRequests', 'myPending'].includes(this.view)) {
+        this.view = Auth.user.role === 'Operations' ? 'myRequests' : 'myPending';
+      }
+      if (this.view === 'myRequests') {
+        container.appendChild(this.renderMyRequestsSection());
+      } else {
+        container.appendChild(this.renderMyPendingSection());
+      }
     } else {
       container.appendChild(this.renderUsersSection());
     }
@@ -175,7 +200,7 @@ const Users = {
       tr.appendChild(el('td')).appendChild(this.roleBadge(u.role));
       tr.appendChild(el('td', { text: (u.entities || []).join(', ') }));
       const tdAct = el('td');
-      const editBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'Edit' });
+      const editBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Edit' });
       editBtn.addEventListener('click', () => this.showUserForm(u.id));
       tdAct.appendChild(editBtn);
       tr.appendChild(tdAct);
@@ -189,8 +214,10 @@ const Users = {
     const map = {
       'Admin': 'badge-danger',
       'Manager': 'badge-warning',
-      'Staff': 'badge-info',
-      'Viewer': 'badge-success'
+      'Accounting': 'badge-info',
+      'Operations': 'badge-success',
+      'Documentation': 'badge-primary',
+      'HR': 'badge-secondary'
     };
     return el('span', { class: 'badge ' + (map[role] || ''), text: role });
   },
@@ -239,7 +266,7 @@ const Users = {
     const roleGroup = el('div', { class: 'form-group' });
     roleGroup.appendChild(el('label', { text: 'Role *' }));
     const roleSel = el('select', { name: 'role', required: true });
-    ['Admin', 'Manager', 'Staff', 'Viewer'].forEach(r => {
+    Auth.ALL_ROLES.forEach(r => {
       const opt = el('option', { value: r, text: r });
       if (user && user.role === r) opt.selected = true;
       roleSel.appendChild(opt);
@@ -266,7 +293,7 @@ const Users = {
 
     const btnGroup = el('div', { class: 'form-group form-actions' });
     const saveBtn = el('button', { type: 'submit', class: 'btn btn-primary', text: 'Save User' });
-    const cancelBtn = el('button', { type: 'button', class: 'btn btn-ghost', text: 'Cancel' });
+    const cancelBtn = el('button', { type: 'button', class: 'btn btn-secondary', text: 'Cancel' });
     cancelBtn.addEventListener('click', () => this.showUserList());
     btnGroup.appendChild(saveBtn);
     btnGroup.appendChild(cancelBtn);
@@ -364,7 +391,7 @@ const Users = {
     const confirmWrap = el('div', { class: 'reset-confirm' });
     confirmWrap.appendChild(el('span', { text: 'Are you sure? This will erase all changes.', style: 'color: var(--color-danger); font-size: 0.875rem;' }));
     const yesBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Yes, Reset' });
-    const noBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'Cancel' });
+    const noBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Cancel' });
     confirmWrap.appendChild(yesBtn);
     confirmWrap.appendChild(noBtn);
     section.appendChild(confirmWrap);
@@ -384,7 +411,7 @@ const Users = {
   // ============================================================
   renderAuditSection() {
     const wrapper = el('div');
-    const isAdmin = Auth.user.role === 'Admin';
+    const canViewAllAudit = Auth.can('audit:view_all');
 
     // Filters
     const filters = el('div', { class: 'audit-filters' });
@@ -396,30 +423,35 @@ const Users = {
       const opt = el('option', { value: u.id, text: u.name });
       userFilter.appendChild(opt);
     });
-    if (!isAdmin) {
+    if (!canViewAllAudit) {
       userFilter.value = Auth.user.id;
       userFilter.disabled = true;
     }
-    filters.appendChild(userFilter);
+    filters.appendChild(wrapFilterFieldWithClear(userFilter));
+
+    // Client Filter
+    const clientOptions = [{ value: '', text: 'All Clients' }];
+    DB.getAll('clients').forEach(c => {
+      clientOptions.push({ value: c.id, text: c.name });
+    });
+    const clientFilter = createSearchableDropdown({ placeholder: 'All Clients', options: clientOptions });
+    filters.appendChild(clientFilter);
 
     filters.appendChild(el('span', { text: 'From:', style: 'font-size: 0.875rem; color: var(--color-text-muted);' }));
     const dateFrom = el('input', { type: 'date', class: 'form-select' });
-    filters.appendChild(dateFrom);
+    filters.appendChild(wrapFilterFieldWithClear(dateFrom));
 
     filters.appendChild(el('span', { text: 'To:', style: 'font-size: 0.875rem; color: var(--color-text-muted);' }));
     const dateTo = el('input', { type: 'date', class: 'form-select' });
-    filters.appendChild(dateTo);
+    filters.appendChild(wrapFilterFieldWithClear(dateTo));
 
-    const filterBtn = el('button', { class: 'btn btn-primary', text: 'Filter' });
-    filterBtn.addEventListener('click', () => this.refreshAuditLog(tableContainer, userFilter.value, dateFrom.value, dateTo.value));
-    filters.appendChild(filterBtn);
-
-    const clearBtn = el('button', { class: 'btn btn-ghost', text: 'Clear' });
+    const clearBtn = el('button', { class: 'btn btn-secondary', text: 'Clear' });
     clearBtn.addEventListener('click', () => {
-      if (isAdmin) userFilter.value = '';
+      if (canViewAllAudit) userFilter.value = '';
+      clientFilter.value = '';
       dateFrom.value = '';
       dateTo.value = '';
-      this.refreshAuditLog(tableContainer, isAdmin ? '' : Auth.user.id, '', '');
+      this.refreshAuditLog(tableContainer, canViewAllAudit ? '' : Auth.user.id, '', '', '', '');
     });
     filters.appendChild(clearBtn);
 
@@ -427,17 +459,53 @@ const Users = {
 
     const tableContainer = el('div');
     wrapper.appendChild(tableContainer);
-    this.refreshAuditLog(tableContainer, isAdmin ? '' : Auth.user.id, '', '');
+
+    const triggerRefresh = () => {
+      this.refreshAuditLog(tableContainer, userFilter.value, clientFilter.value, clientFilter.searchText, dateFrom.value, dateTo.value);
+    };
+
+    userFilter.addEventListener('change', triggerRefresh);
+    clientFilter.addEventListener('change', triggerRefresh);
+    clientFilter.addEventListener('input', triggerRefresh);
+    dateFrom.addEventListener('change', triggerRefresh);
+    dateTo.addEventListener('change', triggerRefresh);
+
+    this.refreshAuditLog(tableContainer, canViewAllAudit ? '' : Auth.user.id, '', '', '', '');
 
     return wrapper;
   },
 
-  refreshAuditLog(container, userId, dateFrom, dateTo) {
+  refreshAuditLog(container, userId, clientId, clientSearchText, dateFrom, dateTo) {
     this.clearNode(container);
     let logs = DB.getAll('auditLog');
 
     if (userId) {
       logs = logs.filter(l => l.userId === userId);
+    }
+
+    if (clientId || (clientSearchText && clientSearchText.trim() !== '')) {
+      const selectedClient = clientId ? DB.getById('clients', clientId) : null;
+      if (selectedClient && selectedClient.name === clientSearchText) {
+        logs = logs.filter(l => {
+          if (!l.details) return false;
+          const detailsLower = l.details.toLowerCase();
+          return detailsLower.includes(clientId.toLowerCase()) ||
+                 detailsLower.includes(selectedClient.name.toLowerCase());
+        });
+      } else if (clientSearchText && clientSearchText.trim() !== '') {
+        const query = clientSearchText.trim().toLowerCase();
+        const matchingClients = DB.getAll('clients').filter(c =>
+          c.id.toLowerCase().includes(query) || c.name.toLowerCase().includes(query)
+        );
+        logs = logs.filter(l => {
+          if (!l.details) return false;
+          const detailsLower = l.details.toLowerCase();
+          if (detailsLower.includes(query)) return true;
+          return matchingClients.some(c =>
+            detailsLower.includes(c.id.toLowerCase()) || detailsLower.includes(c.name.toLowerCase())
+          );
+        });
+      }
     }
 
     if (dateFrom) {
@@ -493,7 +561,8 @@ const Users = {
     }
 
     const entity = Auth.activeEntity;
-    const pendingChanges = PendingChanges.getAllPending();
+    let pendingChanges = PendingChanges.getAllPending();
+    pendingChanges = pendingChanges.filter(pc => PendingChanges.canApproveChange(pc));
     const pendingDisbursements = DB.getWhere('disbursements', d => d.entity === entity && (d.status === 'Submitted' || d.status === 'Under Review'));
 
     if (pendingChanges.length === 0 && pendingDisbursements.length === 0) {
@@ -547,7 +616,12 @@ const Users = {
           amount = data.total;
         } else if (pc.table === 'transmittals') {
           title = `Transmittal: #${data.transmittalNumber || data.id}`;
-        } else if (pc.table === 'clients') {
+        } else if (pc.table === 'tasks') {
+           const wrId = data.workRequestId;
+           const wr = wrId ? DB.getById('workRequests', wrId) : null;
+           title = `Task: ${data.title}`;
+           subtitle = wr ? `For WR: ${wr.title}` : 'Pending task approval';
+         } else if (pc.table === 'clients') {
           title = `Client: ${data.name}`;
         }
         
@@ -579,92 +653,88 @@ const Users = {
   },
 
   renderBoardView(container, items) {
-    const board = el('div', { class: 'board-v2' });
-    
-    // Column 1: Expenses
-    const expCol = el('div', { class: 'board-column-v2' });
-    expCol.style.borderTop = '4px solid #f59e0b';
-    const expHeader = el('div', { class: 'board-column-header-v2' });
-    expHeader.appendChild(el('div', { class: 'board-column-title', text: 'Expense Submissions' }));
-    expCol.appendChild(expHeader);
-    const expCards = el('div', { class: 'board-cards-scroll' });
-    expCol.appendChild(expCards);
-    
-    // Column 2: Billing Submissions
-    const changeCol = el('div', { class: 'board-column-v2' });
-    changeCol.style.borderTop = '4px solid #3b82f6';
-    const changeHeader = el('div', { class: 'board-column-header-v2' });
-    changeHeader.appendChild(el('div', { class: 'board-column-title', text: 'Billing Submissions' }));
-    changeCol.appendChild(changeHeader);
-    const changeCards = el('div', { class: 'board-cards-scroll' });
-    changeCol.appendChild(changeCards);
-    
-    items.forEach(item => {
-      const submitter = DB.getById('users', item.submittedBy);
-      const card = el('div', {
-        class: 'board-card-v2 hover-card',
-        style: 'background: white; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 12px; cursor: pointer; display: flex; flex-direction: column; transition: all 0.2s ease;'
-      });
-      card.addEventListener('click', () => {
-        if (item.type === 'disbursement') {
-          Disbursement.view = 'detail';
-          Disbursement.detailId = item.id;
-          location.hash = '#disbursement';
-        } else {
-          this.pendingDetailId = item.id;
-          App.handleRoute();
+    if (items.length === 0) {
+      container.appendChild(renderEmptyStateV2({
+        variant: 'zero-state',
+        icon: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>',
+        title: 'No pending submissions',
+        body: 'Submitted billing and expense requests will appear here for review.'
+      }));
+      return;
+    }
+
+    const self = this;
+    let expNumber = 1;
+    let billNumber = 1;
+
+    KanbanBoard.render({
+      container,
+      items,
+      getColumnKey: item => item.type === 'disbursement' ? 'expense' : 'billing',
+      columns: [
+        {
+          key: 'expense',
+          label: 'Expense Submissions',
+          targetStatus: 'expense',
+          color: '#f59e0b',
+          emptyState: { variant: 'compact', title: 'No expense submissions', body: '' }
+        },
+        {
+          key: 'billing',
+          label: 'Billing Submissions',
+          targetStatus: 'billing',
+          color: '#3b82f6',
+          emptyState: { variant: 'compact', title: 'No billing submissions', body: '' }
         }
-      });
-      
-      const topRow = el('div', { class: 'card-v2-top', style: 'margin-bottom: 8px;' });
-      topRow.appendChild(el('span', { class: 'card-v2-date', text: formatDate(item.submittedAt) }));
-      card.appendChild(topRow);
-      
-      card.appendChild(el('h4', {
-        text: item.title,
-        style: 'font-size: 0.875rem; font-weight: 600; color: #1e293b; margin: 0 0 4px; line-height: 1.3;'
-      }));
-      
-      card.appendChild(el('p', {
-        text: item.subtitle,
-        style: 'font-size: 0.75rem; color: #64748b; margin: 0 0 10px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; height: 32px;'
-      }));
-      
-      card.appendChild(el('div', { style: 'height: 1px; background: #f1f5f9; margin-bottom: 10px;' }));
-      
-      const bottomRow = el('div', { style: 'display: flex; justify-content: space-between; align-items: center; margin-top: auto;' });
-      const infoLeft = el('div', { style: 'display: flex; flex-direction: column;' });
-      if (item.amount !== null && item.amount !== undefined) {
-        infoLeft.appendChild(el('span', {
-          text: formatPHP(item.amount),
-          style: 'font-size: 0.875rem; font-weight: 700; color: #0f172a;'
-        }));
-      }
-      infoLeft.appendChild(el('span', {
-        text: `By: ${submitter ? submitter.name : 'System'}`,
-        style: 'font-size: 10px; color: #64748b;'
-      }));
-      bottomRow.appendChild(infoLeft);
-      
-      const reviewBtn = el('button', {
-        class: 'btn btn-ghost btn-sm',
-        text: 'Review',
-        style: 'font-size: 11px; padding: 4px 8px;'
-      });
-      bottomRow.appendChild(reviewBtn);
-      
-      card.appendChild(bottomRow);
-      
-      if (item.type === 'disbursement') {
-        expCards.appendChild(card);
-      } else {
-        changeCards.appendChild(card);
-      }
+      ],
+      renderCard(item) {
+        const submitter = DB.getById('users', item.submittedBy);
+        const avatars = submitter ? [{ name: submitter.name, avatarUrl: submitter.avatarUrl }] : [];
+        const isExpense = item.type === 'disbursement';
+        const key = (isExpense ? 'EXP-' : 'BIL-') + (isExpense ? expNumber++ : billNumber++);
+        const color = isExpense ? '#f59e0b' : '#3b82f6';
+
+        const card = buildCompactBoardCard({
+          key,
+          statusColor: color,
+          title: item.title,
+          description: item.subtitle,
+          date: item.submittedAt ? formatDate(item.submittedAt) : '',
+          priority: isExpense ? 'Expense' : 'Billing',
+          priorityClass: isExpense ? 'card-v2-priority-medium' : 'card-v2-priority-normal',
+          avatars,
+          onClick: () => {
+            if (isExpense) {
+              location.hash = '#disbursement/detail/' + item.id;
+            } else {
+              self.pendingDetailId = item.id;
+              App.handleRoute();
+            }
+          }
+        });
+
+        const footerRight = card.querySelector('.card-v2-footer-right');
+        if (item.amount !== null && item.amount !== undefined) {
+          footerRight.appendChild(el('div', { class: 'card-v2-footer-item', text: formatPHP(item.amount), style: 'font-weight:700;color:var(--color-text);' }));
+        }
+        return card;
+      },
+      cardMenuItems(item) {
+        return [{
+          label: 'View Details',
+          icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
+          onClick: () => {
+            if (item.type === 'disbursement') {
+              location.hash = '#disbursement/detail/' + item.id;
+            } else {
+              self.pendingDetailId = item.id;
+              App.handleRoute();
+            }
+          }
+        }];
+      },
+      drag: { enabled: false }
     });
-    
-    board.appendChild(expCol);
-    board.appendChild(changeCol);
-    container.appendChild(board);
   },
 
   renderTableView(container, items) {
@@ -681,9 +751,7 @@ const Users = {
       const tr = el('tr', { style: 'cursor: pointer;' });
       tr.addEventListener('click', () => {
         if (item.type === 'disbursement') {
-          Disbursement.view = 'detail';
-          Disbursement.detailId = item.id;
-          location.hash = '#disbursement';
+          location.hash = '#disbursement/detail/' + item.id;
         } else {
           this.pendingDetailId = item.id;
           App.handleRoute();
@@ -703,8 +771,8 @@ const Users = {
       
       // Title / Description
       const tdTitle = el('td');
-      tdTitle.appendChild(el('div', { text: item.title, style: 'font-weight: 600; color: #1e293b;' }));
-      tdTitle.appendChild(el('div', { text: item.subtitle, style: 'font-size: 0.75rem; color: #64748b; margin-top: 2px;' }));
+      tdTitle.appendChild(el('div', { text: item.title, style: 'font-weight: 600; color: var(--color-text);' }));
+      tdTitle.appendChild(el('div', { text: item.subtitle, style: 'font-size: 0.75rem; color: var(--color-text-muted); margin-top: 2px;' }));
       tr.appendChild(tdTitle);
       
       // Amount
@@ -721,7 +789,7 @@ const Users = {
       
       // Actions
       const tdAct = el('td');
-      const reviewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: 'Review' });
+      const reviewBtn = el('button', { class: 'btn btn-secondary btn-sm', text: 'Review' });
       tdAct.appendChild(reviewBtn);
       tr.appendChild(tdAct);
       
@@ -738,9 +806,7 @@ const Users = {
       const row = el('div', { class: 'list-item', style: 'cursor: pointer;' });
       row.addEventListener('click', () => {
         if (item.type === 'disbursement') {
-          Disbursement.view = 'detail';
-          Disbursement.detailId = item.id;
-          location.hash = '#disbursement';
+          location.hash = '#disbursement/detail/' + item.id;
         } else {
           this.pendingDetailId = item.id;
           App.handleRoute();
@@ -769,7 +835,7 @@ const Users = {
       row.appendChild(leftPart);
       
       const rightWrap = el('div', { style: 'margin-left: auto;' });
-      rightWrap.appendChild(el('button', { class: 'btn btn-ghost btn-sm', text: 'Review' }));
+      rightWrap.appendChild(el('button', { class: 'btn btn-secondary btn-sm', text: 'Review' }));
       row.appendChild(rightWrap);
       
       list.appendChild(row);
@@ -877,16 +943,16 @@ const Users = {
       return el('p', { text: 'Pending change not found.', class: 'empty-state' });
     }
 
-    const canApprove = Auth.user.role === 'Admin' || Auth.user.role === 'Manager';
+    const canApprove = PendingChanges.canApproveChange(pc);
     const isSubmitter = pc.submittedBy === Auth.user.id;
 
     const wrapper = el('div', { style: 'max-width: 800px; margin: 0 auto;' });
     
     // Header
-    const header = el('div', { class: 'form-header-bar', style: 'border-bottom: 1px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 24px;' });
-    header.appendChild(el('h2', { text: 'Review Pending Change Request', style: 'margin: 0; font-size: 1.25rem; font-weight: 600; color: #1e3a8a;' }));
+    const header = el('div', { class: 'form-header-bar', style: 'border-bottom: 1px solid var(--color-border); padding-bottom: 16px; margin-bottom: 24px;' });
+    header.appendChild(el('h2', { text: 'Review Pending Change Request', style: 'margin: 0; font-size: 1.25rem; font-weight: 600; color: var(--color-primary);' }));
     
-    const backBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '← Back to List' });
+    const backBtn = el('button', { class: 'btn btn-secondary btn-sm', text: '← Back to List' });
     backBtn.addEventListener('click', () => {
       this.pendingDetailId = null;
       App.handleRoute();
@@ -897,13 +963,14 @@ const Users = {
     // Meta Card
     const submitter = DB.getById('users', pc.submittedBy);
     const metaCard = el('div', {
-      style: 'background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;'
+      class: 'card',
+      style: 'border-radius: 8px; padding: 16px; margin-bottom: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;'
     });
-    
+
     const addMeta = (label, val) => {
       const g = el('div');
-      g.appendChild(el('div', { text: label, style: 'font-size: 11px; font-weight: 600; text-transform: uppercase; color: #64748b; margin-bottom: 4px;' }));
-      g.appendChild(el('div', { text: val, style: 'font-size: 0.875rem; font-weight: 500; color: #0f172a;' }));
+      g.appendChild(el('div', { text: label, style: 'font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 4px;' }));
+      g.appendChild(el('div', { text: val, style: 'font-size: 0.875rem; font-weight: 500; color: var(--color-text);' }));
       metaCard.appendChild(g);
     };
 
@@ -921,17 +988,17 @@ const Users = {
       const wr = proposed && proposed.workRequestId ? DB.getById('workRequests', proposed.workRequestId) : null;
 
       const invoiceReviewSection = el('div', { class: 'form-section', style: 'margin-bottom: 24px;' });
-      invoiceReviewSection.appendChild(el('h3', { text: '📄 Invoice / Billing Details', style: 'font-size: 1rem; font-weight: 600; color: #1e3a8a; margin-bottom: 12px;' }));
+      invoiceReviewSection.appendChild(el('h3', { text: '📄 Invoice / Billing Details', style: 'font-size: 1rem; font-weight: 600; color: var(--color-primary); margin-bottom: 12px;' }));
 
-      const invoiceCard = el('div', { class: 'card', style: 'border: 1px solid #cbd5e1; border-radius: 8px; padding: 20px; background: #f8fafc;' });
+      const invoiceCard = el('div', { class: 'card', style: 'border-radius: 8px; padding: 20px;' });
 
       // Meta Grid
       const grid = el('div', { style: 'display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 16px;' });
 
       const addGridField = (lbl, val) => {
         const field = el('div');
-        field.appendChild(el('div', { text: lbl, style: 'font-size: 11px; font-weight: 600; text-transform: uppercase; color: #64748b; margin-bottom: 4px;' }));
-        field.appendChild(el('div', { text: val, style: 'font-size: 0.875rem; font-weight: 600; color: #1e293b;' }));
+        field.appendChild(el('div', { text: lbl, style: 'font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 4px;' }));
+        field.appendChild(el('div', { text: val, style: 'font-size: 0.875rem; font-weight: 600; color: var(--color-text);' }));
         grid.appendChild(field);
       };
 
@@ -946,8 +1013,8 @@ const Users = {
 
       // Line Items Sub-table
       if (proposed && Array.isArray(proposed.lineItems) && proposed.lineItems.length > 0) {
-        invoiceCard.appendChild(el('div', { text: 'Line Items', style: 'font-size: 11px; font-weight: 600; text-transform: uppercase; color: #64748b; margin-bottom: 8px; margin-top: 12px;' }));
-        const liTable = el('table', { class: 'data-table', style: 'width: 100%; font-size: 0.8125rem; background: white; border: 1px solid #e2e8f0; border-radius: 6px;' });
+        invoiceCard.appendChild(el('div', { text: 'Line Items', style: 'font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--color-text-muted); margin-bottom: 8px; margin-top: 12px;' }));
+        const liTable = el('table', { class: 'data-table', style: 'width: 100%; font-size: 0.8125rem; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 6px;' });
         const liThead = el('thead');
         const liThr = el('tr');
         ['Type', 'Description', 'Amount'].forEach(h => liThr.appendChild(el('th', { text: h, style: 'text-align: left; padding: 8px;' })));
@@ -972,9 +1039,9 @@ const Users = {
 
     // Diff / Change Details Section
     const diffSection = el('div', { class: 'form-section', style: 'margin-bottom: 24px;' });
-    diffSection.appendChild(el('h3', { text: 'Change Comparison', style: 'font-size: 1rem; font-weight: 600; color: #1e293b; margin-bottom: 12px;' }));
-    
-    const diffContainer = el('div', { class: 'card', style: 'border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; background: white;' });
+    diffSection.appendChild(el('h3', { text: 'Change Comparison', style: 'font-size: 1rem; font-weight: 600; color: var(--color-text); margin-bottom: 12px;' }));
+
+    const diffContainer = el('div', { class: 'card', style: 'border-radius: 8px; padding: 20px;' });
     
     // Custom diff tables rendering for beautiful layout
     const { current, proposed, diffs, isNew } = PendingChanges.buildDiff(pc);
@@ -987,7 +1054,7 @@ const Users = {
       const diffTable = el('table', { class: 'report-table', style: 'width: 100%; border-collapse: collapse;' });
       const diffThead = el('thead');
       const diffThr = el('tr');
-      ['Field', 'Proposed Value'].forEach(h => diffThr.appendChild(el('th', { text: h, style: 'text-align: left; padding: 10px; background: #f8fafc; border-bottom: 2px solid #e2e8f0; font-size: 0.8125rem;' })));
+      ['Field', 'Proposed Value'].forEach(h => diffThr.appendChild(el('th', { text: h, style: 'text-align: left; padding: 10px; background: var(--color-bg-muted); border-bottom: 2px solid var(--color-border); font-size: 0.8125rem;' })));
       diffThead.appendChild(diffThr);
       diffTable.appendChild(diffThead);
       
@@ -1016,8 +1083,8 @@ const Users = {
           } catch(e) {}
         }
         
-        tr.appendChild(el('td', { text: niceKey, style: 'padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-weight: 600; font-size: 0.8125rem; color: #334155;' }));
-        tr.appendChild(el('td', { text: newVal, style: 'padding: 12px 10px; border-bottom: 1px solid #e2e8f0; font-weight: 600; font-size: 0.8125rem; color: #16a34a; background: #f0fdf4;' }));
+        tr.appendChild(el('td', { text: niceKey, style: 'padding: 12px 10px; border-bottom: 1px solid var(--color-border); font-weight: 600; font-size: 0.8125rem; color: var(--color-text);' }));
+        tr.appendChild(el('td', { text: newVal, style: 'padding: 12px 10px; border-bottom: 1px solid var(--color-border); font-weight: 600; font-size: 0.8125rem; color: var(--color-success); background: rgba(52, 211, 153, 0.12);' }));
         diffTbody.appendChild(tr);
       });
       diffTable.appendChild(diffTbody);
@@ -1028,12 +1095,12 @@ const Users = {
     wrapper.appendChild(diffSection);
 
     // Actions Footer
-    const actions = el('div', { 
-      style: 'display: flex; gap: 12px; border-top: 1px solid #e2e8f0; padding-top: 20px; margin-top: 24px;' 
+    const actions = el('div', {
+      style: 'display: flex; gap: 12px; border-top: 1px solid var(--color-border); padding-top: 20px; margin-top: 24px;'
     });
 
     if (canApprove) {
-      const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve Change', style: 'padding: 10px 20px; font-weight: 600;' });
+      const approveBtn = el('button', { class: 'btn btn-success', text: 'Approve Change' });
       approveBtn.addEventListener('click', () => {
         Workflow.showConfirm('Confirm Approval', 'Are you sure you want to approve this change?', () => {
           PendingChanges.approve(pc.id);
@@ -1043,7 +1110,7 @@ const Users = {
       });
       actions.appendChild(approveBtn);
 
-      const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject', style: 'padding: 10px 20px; font-weight: 600;' });
+      const rejectBtn = el('button', { class: 'btn btn-danger', text: 'Reject' });
       rejectBtn.addEventListener('click', () => {
         const reason = prompt('Enter rejection reason:');
         if (reason !== null) {
@@ -1054,7 +1121,7 @@ const Users = {
       });
       actions.appendChild(rejectBtn);
     } else if (isSubmitter && pc.status === 'pending') {
-      const withdrawBtn = el('button', { class: 'btn btn-ghost', text: 'Withdraw Submission', style: 'padding: 10px 20px; font-weight: 600; border: 1px solid #e2e8f0;' });
+      const withdrawBtn = el('button', { class: 'btn btn-secondary', text: 'Withdraw Submission' });
       withdrawBtn.addEventListener('click', () => {
         Workflow.showConfirm('Confirm Withdrawal', 'Are you sure you want to withdraw this submission?', () => {
           PendingChanges.delete(pc.id);
@@ -1066,6 +1133,73 @@ const Users = {
     }
 
     wrapper.appendChild(actions);
+    return wrapper;
+  },
+
+  renderMyRequestsSection() {
+    const wrapper = el('div');
+    const requests = DB.getWhere('operationsRequests', r => r.requestedBy === Auth.user.id);
+    
+    if (requests.length === 0) {
+      wrapper.appendChild(el('p', { text: 'No requests submitted yet.', class: 'empty-state' }));
+      return wrapper;
+    }
+
+    const table = el('table', { class: 'data-table' });
+    const thead = el('thead');
+    const thr = el('tr');
+    ['Request Type', 'Work Request', 'Client', 'Requested At', 'Status', 'Fulfill Info / Actions'].forEach(h => thr.appendChild(el('th', { text: h })));
+    thead.appendChild(thr);
+    table.appendChild(thead);
+
+    const tbody = el('tbody');
+    requests.forEach(r => {
+      const tr = el('tr');
+      
+      const typeLabel = r.type === 'billing' ? 'Billing' : r.type === 'disbursement' ? 'Disbursement' : 'Transmittal';
+      tr.appendChild(el('td', { text: typeLabel }));
+      
+      const wr = DB.getById('workRequests', r.workRequestId);
+      tr.appendChild(el('td', { text: wr ? wr.title : '—' }));
+      
+      const client = DB.getById('clients', r.clientId);
+      tr.appendChild(el('td', { text: client ? client.name : '—' }));
+      
+      tr.appendChild(el('td', { text: formatDate(r.requestedAt) }));
+      
+      const st = r.status;
+      const badge = el('span', { 
+        class: 'badge', 
+        text: st,
+        style: `font-size: 11px; padding: 2px 6px; border-radius: var(--radius-sm); background: ${st === 'fulfilled' ? 'color-mix(in oklab, var(--success), transparent 88%)' : st === 'rejected' ? 'color-mix(in oklab, var(--danger), transparent 88%)' : 'color-mix(in oklab, var(--warn), transparent 88%)'}; color: ${st === 'fulfilled' ? 'var(--success)' : st === 'rejected' ? 'var(--danger)' : 'color-mix(in oklab, var(--warn), black 30%)'};`
+      });
+      const tdSt = el('td');
+      tdSt.appendChild(badge);
+      tr.appendChild(tdSt);
+
+      const tdAct = el('td');
+      if (st === 'pending') {
+        const cancelBtn = el('button', { class: 'btn btn-danger btn-sm', text: 'Cancel Request' });
+        cancelBtn.addEventListener('click', () => {
+          Workflow.showConfirm('Cancel Request', 'Are you sure you want to cancel this request?', () => {
+            DB.delete('operationsRequests', r.id);
+            App.handleRoute();
+          }, 'danger');
+        });
+        tdAct.appendChild(cancelBtn);
+      } else if (st === 'fulfilled') {
+        const fulfiller = DB.getById('users', r.fulfilledBy);
+        tdAct.textContent = `Fulfilled by ${fulfiller ? fulfiller.name : 'System'} on ${formatDate(r.fulfilledAt)}`;
+      } else if (st === 'rejected') {
+        tdAct.textContent = r.rejectionReason ? `Reason: ${r.rejectionReason}` : 'No reason provided';
+      }
+      tr.appendChild(tdAct);
+      
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrapper.appendChild(table);
+
     return wrapper;
   }
 };
